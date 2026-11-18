@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VETTING chat widget — dev</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; padding: 40px; background: #eef1f5; color: #1b1f24; }
+      .card { max-width: 640px; background: #fff; padding: 24px 28px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+      button { margin: 4px 6px 4px 0; padding: 8px 14px; border-radius: 8px; border: 1px solid #1f4e79; background: #fff; color: #1f4e79; cursor: pointer; }
+      button.active { background: #1f4e79; color: #fff; }
+      code { background: #f1f3f6; padding: 2px 5px; border-radius: 4px; }
+      /* Hostile host styles: the Shadow DOM should keep the widget unaffected. */
+      * { font-family: "Comic Sans MS", cursive !important; }
+      div { line-height: 3 !important; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Widget dev page</h1>
+      <p>Pick an audience to re-mount the widget. Run <code>npm run mock</code> first so the mock gateway is on <code>:8787</code>.</p>
+      <div id="switcher">
+        <button data-a="public" class="active">Public site</button>
+        <button data-a="client">Client portal</button>
+        <button data-a="candidate">Candidate portal</button>
+      </div>
+      <p><small>This page deliberately sets Comic Sans and huge line-height on everything to prove the widget's styles are isolated.</small></p>
+    </div>
+
+    <script type="module" src="/src/main.tsx" data-vetting-chat data-audience="public" data-region="UK"></script>
+    <script type="module">
+      document.querySelectorAll("#switcher button").forEach((b) =>
+        b.addEventListener("click", () => {
+          document.querySelectorAll("#switcher button").forEach((x) => x.classList.remove("active"));
+          b.classList.add("active");
+          const audience = b.dataset.a;
+          window.VettingChat.destroy();
+          window.VettingChat.init({
+            audience,
+            // Portals pass a token issued after login. The mock gateway accepts these fake ones.
+            authToken: audience === "public" ? undefined : `dev-token-${audience}`,
+            startOpen: true,
+          });
+        }),
+      );
+    </script>
+  </body>
+</html>
