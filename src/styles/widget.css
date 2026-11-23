@@ -388,3 +388,11 @@ button:disabled {
     animation: none;
   }
 }
+
+.vc-msg a {
+  color: var(--vc-primary);
+  text-decoration: underline;
+}
+.vc-msg--user a {
+  color: inherit;
+}

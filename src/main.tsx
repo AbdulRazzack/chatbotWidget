@@ -5,7 +5,7 @@ import type { Audience, Region, WidgetConfig } from "./types";
 
 const AUDIENCES: Audience[] = ["public", "client", "candidate"];
 const REGIONS: Region[] = ["UK", "AU"];
-const DEFAULT_GATEWAY = "http://localhost:8787";
+const DEFAULT_TOKEN_URL = "http://localhost:8787/token";
 
 // Must be read synchronously while this script is executing. Module scripts (Vite dev server)
 // don't set currentScript, so fall back to the first tag carrying our data attributes.
@@ -21,7 +21,7 @@ function configFromScript(el: HTMLScriptElement | null): Partial<WidgetConfig> {
   return {
     audience: d.audience as Audience | undefined,
     region: d.region as Region | undefined,
-    gatewayUrl: d.gatewayUrl,
+    tokenUrl: d.tokenUrl,
     startOpen: d.startOpen === "true",
   };
 }
@@ -33,7 +33,7 @@ function normalise(input: Partial<WidgetConfig>): WidgetConfig {
     audience,
     region,
     authToken: input.authToken,
-    gatewayUrl: input.gatewayUrl || DEFAULT_GATEWAY,
+    tokenUrl: input.tokenUrl || DEFAULT_TOKEN_URL,
     startOpen: input.startOpen,
   };
 }

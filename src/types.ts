@@ -7,8 +7,8 @@ export interface WidgetConfig {
   region?: Region;
   /** Short-lived signed token issued by the client/candidate portal. Never set on the public site. */
   authToken?: string;
-  /** Base URL of the Chat Gateway. Defaults to http://localhost:8787 in development. */
-  gatewayUrl: string;
+  /** Our token server, which exchanges a Copilot Studio Direct Line secret for a conversation token. */
+  tokenUrl: string;
   /** Open the chat window immediately on load. */
   startOpen?: boolean;
 }
@@ -19,43 +19,47 @@ export interface ChatMessage {
   id: string;
   role: Role;
   text: string;
-  /** True while tokens are still streaming in. */
-  pending?: boolean;
 }
 
-/** Returned by POST /session. The gateway decides the audience from the verified token. */
-export interface SessionResponse {
-  sessionId: string;
+/**
+ * Returned by POST {tokenUrl}. The token server decides the audience (and therefore which
+ * Copilot Studio agent) from the verified portal token — never from the page's data-audience.
+ */
+export interface TokenResponse {
+  token: string;
+  /** Direct Line base URL, e.g. https://europe.directline.botframework.com/v3/directline */
+  domain: string;
+  /** The Direct Line user id the token is bound to. Activities must be sent "from" this id. */
+  userId: string;
   audience: Audience;
   authenticated: boolean;
+  /** WebSocket in production; the local mock uses polling. */
+  webSocket: boolean;
 }
-
-/** Events streamed by POST /chat (Server-Sent Events, one JSON object per `data:` line). */
-export type ChatStreamEvent =
-  | { type: "token"; text: string }
-  | { type: "handoff_suggested"; reason?: string }
-  | { type: "done" }
-  | { type: "error"; message: string };
 
 /** "Who are you?" — only asked on the public site; portals already know. */
 export type VisitorType = "candidate" | "client" | "referee";
 
+/** Value of the `handoffRequest` event the widget sends to the front agent. */
 export interface HandoffRequest {
-  sessionId: string;
   name: string;
   email: string;
   issue: string;
   visitorType?: VisitorType;
   region?: Region;
+  pageUrl: string;
 }
 
-export interface HandoffResponse {
-  ticketRef: string;
-}
-
-export interface CaseSummary {
-  ticketRef: string;
-  subject: string;
-  status: string;
-  updatedAt: string;
-}
+/** Event names exchanged with Copilot Studio. Keep in sync with COPILOT_STUDIO.md. */
+export const EVENTS = {
+  /** widget → agent, once per conversation: context for the agent's global variables. */
+  startConversation: "startConversation",
+  /** widget → agent: the handoff form was submitted. */
+  handoffRequest: "handoffRequest",
+  /** agent → widget: Ticketing Agent created (or reused) a HubSpot ticket. value: { ticketRef } */
+  ticketCreated: "ticketCreated",
+  /** agent → widget: ticket creation failed. value: { message? } */
+  ticketFailed: "ticketFailed",
+  /** agent → widget: show the "contact support" nudge. */
+  handoffSuggested: "handoffSuggested",
+} as const;

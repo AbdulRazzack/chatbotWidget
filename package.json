@@ -9,10 +9,13 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "mock": "node mock-gateway/server.js",
+    "mock": "node mock-copilot/server.js",
+    "token-server": "node --env-file=.env server/token-server.js",
     "start": "concurrently -n gateway,widget -c blue,green \"npm:mock\" \"npm:dev\""
   },
   "dependencies": {
+    "botframework-directlinejs": "^0.15.9",
+    "jose": "^5.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

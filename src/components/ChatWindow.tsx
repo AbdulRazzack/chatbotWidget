@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { GatewayClient } from "../api/client";
 import { AUDIENCES, HANDOFF_PHRASES } from "../config/audiences";
-import { useChatStream } from "../hooks/useChatStream";
-import { useSession } from "../hooks/useSession";
+import { useConversation } from "../hooks/useConversation";
 import type { WidgetConfig } from "../types";
 import { Composer } from "./Composer";
 import { HandoffForm, type HandoffValues } from "./HandoffForm";
@@ -14,26 +12,25 @@ type View = "chat" | "handoff" | "confirmed";
 
 interface Props {
   config: WidgetConfig;
-  client: GatewayClient;
   onClose: () => void;
 }
 
 const wantsHuman = (text: string) => HANDOFF_PHRASES.some((p) => text.toLowerCase().includes(p));
 
-export function ChatWindow({ config, client, onClose }: Props) {
-  const { session, error: sessionError } = useSession(client, true);
-  // Use the audience the gateway verified, falling back to the page hint for copy until it loads.
-  const audience = session?.audience ?? config.audience;
-  const settings = AUDIENCES[audience];
+export function ChatWindow({ config, onClose }: Props) {
+  const convo = useConversation(config, AUDIENCES[config.audience].greeting);
+  // Copy follows the audience the token server verified, not just the page hint.
+  const settings = AUDIENCES[convo.audience];
 
-  const chat = useChatStream(client, session?.sessionId, settings.greeting);
   const [view, setView] = useState<View>("chat");
   const [ticketRef, setTicketRef] = useState<string | null>(null);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const windowRef = useRef<HTMLDivElement>(null);
 
-  const hasUserMessages = useMemo(() => chat.messages.some((m) => m.role === "user"), [chat.messages]);
+  const hasUserMessages = useMemo(() => convo.messages.some((m) => m.role === "user"), [convo.messages]);
+  const online = convo.state === "online";
+  const chips = hasUserMessages ? convo.suggestions : settings.quickReplies;
 
   // Esc closes the window; focus moves into it on open.
   useEffect(() => {
@@ -48,24 +45,19 @@ export function ChatWindow({ config, client, onClose }: Props) {
       setView("handoff");
       return;
     }
-    void chat.send(text);
+    convo.send(text);
   };
 
   const handleHandoff = async (values: HandoffValues) => {
-    if (!session) return;
     setSubmitting(true);
     setHandoffError(null);
     try {
-      const { ticketRef } = await client.submitHandoff({
-        sessionId: session.sessionId,
-        region: config.region,
-        ...values,
-      });
-      setTicketRef(ticketRef);
+      const ref = await convo.requestTicket({ ...values, region: config.region, pageUrl: location.href });
+      setTicketRef(ref);
       setView("confirmed");
-      chat.addSystemMessage(`Support request logged — reference ${ticketRef}.`);
+      convo.addMessage("system", `Support request logged — reference ${ref}.`);
     } catch {
-      // Never claim a ticket exists unless the gateway confirmed it.
+      // Never claim a ticket exists unless the Ticketing Agent confirmed it.
       setHandoffError(
         "Sorry, we couldn't log your request just now. Please try again in a moment, or email support@vetting.com.",
       );
@@ -86,19 +78,17 @@ export function ChatWindow({ config, client, onClose }: Props) {
         </button>
       </header>
 
-      {sessionError && (
+      {convo.state === "error" && (
         <p className="vc-error vc-banner" role="alert">
-          We couldn't connect to support right now. Please try again later.
+          We couldn't connect to support right now. Please try again later or email support@vetting.com.
         </p>
       )}
 
       {view === "chat" && (
         <>
-          <MessageList messages={chat.messages} />
-          {!hasUserMessages && (
-            <QuickReplies options={settings.quickReplies} onPick={handleSend} disabled={!session} />
-          )}
-          {chat.handoffSuggested && (
+          <MessageList messages={convo.messages} typing={convo.waitingForReply} />
+          <QuickReplies options={chips} onPick={handleSend} disabled={!online} />
+          {convo.handoffSuggested && (
             <div className="vc-handoff-nudge">
               <span>Would you like to contact our support team?</span>
               <button type="button" className="vc-btn vc-btn--small" onClick={() => setView("handoff")}>
@@ -106,9 +96,13 @@ export function ChatWindow({ config, client, onClose }: Props) {
               </button>
             </div>
           )}
-          <Composer onSend={handleSend} onStop={chat.stop} streaming={chat.streaming} disabled={!session} />
+          <Composer
+            onSend={handleSend}
+            disabled={!online}
+            placeholder={convo.state === "connecting" ? "Connecting…" : undefined}
+          />
           <footer className="vc-footer">
-            <button type="button" className="vc-link" onClick={() => setView("handoff")}>
+            <button type="button" className="vc-link" onClick={() => setView("handoff")} disabled={!online}>
               Talk to a person
             </button>
             <span>AI assistant · answers may be imperfect</span>
@@ -130,7 +124,7 @@ export function ChatWindow({ config, client, onClose }: Props) {
         <TicketConfirmation
           ticketRef={ticketRef}
           onDone={() => {
-            chat.setHandoffSuggested(false);
+            convo.setHandoffSuggested(false);
             setView("chat");
           }}
         />

@@ -1,39 +1,51 @@
 # VETTING Chat Widget
 
-One embeddable React chat widget used on all three VETTING sites:
+One embeddable React chat widget used on all three VETTING sites, connected to **Microsoft Copilot Studio** agents.
 
-| Site | Audience | Login |
-|---|---|---|
-| Public website | `public` | None |
-| Client portal | `client` | Portal-issued token |
-| Candidate portal | `candidate` | Portal-issued token |
+| Site | Audience | Copilot Studio agent | Login |
+|---|---|---|---|
+| Public website | `public` | VETTING Public | None |
+| Client portal | `client` | VETTING Client | Portal-issued token |
+| Candidate portal | `candidate` | VETTING Candidate | Portal-issued token |
 
-The widget only talks to the **Chat Gateway** (our backend). The gateway runs the agents and creates HubSpot tickets. No secrets ever live in the widget.
+All three front agents hand off to one backend **VETTING Ticketing** agent, which creates HubSpot tickets.
 
 ```
-Website ──<script>──► Widget (React, Shadow DOM) ──HTTPS/SSE──► Chat Gateway ──► Agent (LLM)
-                                                                     └──────────► HubSpot (tickets)
+                                   ┌─ Public agent ────┐
+Website ─► Widget ─(Direct Line)─► ├─ Client agent ────┤ ─(connected agent)─► Ticketing agent ─► Power Automate ─► HubSpot
+              │                    └─ Candidate agent ─┘
+              └─► Token server (ours): verifies login, picks the agent, swaps its Direct Line secret for a short-lived token
 ```
 
-## Quick start
+The browser never sees a Direct Line secret or a HubSpot token.
+
+## Quick start (no Microsoft account needed)
 
 ```bash
 npm install
-npm start          # mock gateway on :8787 + widget dev server on :5173
+npm start          # mock Copilot Studio on :8787 + widget dev server on :5173
 ```
 
-Open http://localhost:5173 and use the buttons to switch between public / client / candidate.
+Open http://localhost:5173 and switch between public / client / candidate.
 
-Try: *"How long does a DBS check take?"*, *"My check link has expired"*, or *"Talk to a person"*.
-Using an email containing `fail` in the handoff form simulates HubSpot being down.
+Try *"How long does a DBS check take?"*, *"My check link has expired"*, or **Talk to a person**.
+In the handoff form, an email containing `fail` simulates HubSpot being down.
+The mock's terminal shows the HubSpot ticket the Ticketing agent *would* create.
 
 ### Test the production bundle
 
 ```bash
-npm run build      # -> dist/widget.js (single file, React included)
-npm run mock       # in one terminal
-npx serve .        # in another, then open http://localhost:3000/demo/public.html
+npm run build      # -> dist/widget.js (single file)
+npm run mock       # terminal 1
+npx serve .        # terminal 2 → http://localhost:3000/demo/public.html
 ```
+
+## Going live with real Copilot Studio
+
+1. Build the four agents. See **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)** for the event contract and ticketing inputs.
+2. `cp .env.example .env` and fill in the three Direct Line secrets, allowed origins and portal token settings.
+3. `npm run token-server`, then deploy it (e.g. Azure App Service) behind HTTPS.
+4. Point each site's embed at it with `data-token-url`.
 
 ## Embedding
 
@@ -43,7 +55,7 @@ npx serve .        # in another, then open http://localhost:3000/demo/public.htm
 <script src="https://chat.vetting.com/widget.js"
         data-audience="public"
         data-region="UK"
-        data-gateway-url="https://chat-api.vetting.com"
+        data-token-url="https://chat-api.vetting.com/token"
         async></script>
 ```
 
@@ -52,7 +64,7 @@ npx serve .        # in another, then open http://localhost:3000/demo/public.htm
 ```html
 <script src="https://chat.vetting.com/widget.js"
         data-audience="candidate"
-        data-gateway-url="https://chat-api.vetting.com"
+        data-token-url="https://chat-api.vetting.com/token"
         data-manual-init="true"></script>
 <script>
   window.VettingChat.init({ authToken: "<short-lived token from portal backend>" });
@@ -61,67 +73,57 @@ npx serve .        # in another, then open http://localhost:3000/demo/public.htm
 
 | Attribute / option | Values | Notes |
 |---|---|---|
-| `data-audience` / `audience` | `public` \| `client` \| `candidate` | UI hint only; gateway decides real audience from token |
-| `data-region` / `region` | `UK` \| `AU` | Maps to HubSpot "AU / UK Prod" |
-| `data-gateway-url` / `gatewayUrl` | URL | Defaults to `http://localhost:8787` |
+| `data-audience` / `audience` | `public` \| `client` \| `candidate` | UI hint only; token server decides the real audience from the login |
+| `data-region` / `region` | `UK` \| `AU` | Sent to the agent; maps to HubSpot "AU / UK Prod" |
+| `data-token-url` / `tokenUrl` | URL | Defaults to `http://localhost:8787/token` |
 | `data-start-open` / `startOpen` | `true` | Open on load |
 | `data-manual-init` | `true` | Don't auto-start; call `VettingChat.init()` yourself |
-| `authToken` (JS only) | string | Never put this in HTML attributes on a cached page |
+| `authToken` (JS only) | string | Portal login token |
 
 JS API: `window.VettingChat.init(options)`, `window.VettingChat.destroy()`.
 
-## Gateway API contract
+## Token server API
 
-The real gateway must implement these endpoints with the same shapes as `mock-gateway/server.js`.
-Types live in `src/types.ts`.
+`POST /token` (optional `Authorization: Bearer <portal token>`) →
 
-| Method & path | Request | Response |
-|---|---|---|
-| `POST /session` | `Authorization: Bearer <token>` (optional), body `{ requestedAudience, region, sessionId? }` | `{ sessionId, audience, authenticated }` |
-| `POST /chat` | header `X-Session-Id`, body `{ sessionId, message }` | `text/event-stream`, each `data:` line is one of `{type:"token",text}`, `{type:"handoff_suggested",reason?}`, `{type:"error",message}`, `{type:"done"}` |
-| `POST /handoff` | body `{ sessionId, name, email, issue, visitorType?, region? }` | `{ ticketRef }` — only after HubSpot confirms creation |
-| `GET /cases` | header `X-Session-Id` (client/candidate only) | `[{ ticketRef, subject, status, updatedAt }]` scoped to the logged-in user |
+```json
+{ "token": "…", "domain": "https://europe.directline.botframework.com/v3/directline",
+  "userId": "dl_…", "audience": "candidate", "authenticated": true, "webSocket": true }
+```
 
-### Handoff → HubSpot mapping (gateway side)
-
-| Widget data | HubSpot field |
-|---|---|
-| — | Pipeline = Support Pipeline, Ticket status = New, Source = Chat |
-| audience / `visitorType` | Category (Candidate / Client / Referee) |
-| `region` | AU / UK Prod |
-| `issue` + chat summary | Ticket name ("External chatbot – …") and description, sanitised transcript as a note |
-| `name`, `email` | Contact (search, else create) associated to the ticket |
-
-See *Chatbot Integration Doc* in the project for the full spec.
+An invalid portal token returns `401`. There's no silent downgrade to public.
 
 ## Security rules
 
-- No HubSpot or LLM keys in this repo's frontend code. Ever.
-- The gateway derives audience and identity from the **verified token**, never from `data-audience`.
-- Public sessions get bot protection (e.g. Cloudflare Turnstile) and rate limits at the gateway.
-- Don't ask for passwords, passport images or criminal-record details in chat; the gateway redacts before sending anything to the LLM or HubSpot.
-- Only say "ticket logged" when the gateway returns a `ticketRef`.
+- Direct Line secrets live only in the token server's environment; HubSpot credentials only in Power Automate.
+- Turn on web channel security on each front agent so it can't be reached by agent ID alone.
+- The token server decides audience and user id from the **verified** login, never from `data-audience`.
+- "Ticket logged" is shown only when the agent sends `ticketCreated` with a reference.
+- Agent replies are rendered as text (tiny safe markdown subset, no HTML injection).
 
 ## Project structure
 
 ```
 src/
-  main.tsx              loader: reads data-* attrs, mounts into Shadow DOM, exposes window.VettingChat
-  App.tsx               launcher + window
-  config/audiences.ts   per-audience copy and quick replies
-  api/client.ts         typed gateway client (incl. SSE parsing)
-  hooks/                useSession, useChatStream
-  components/           Launcher, ChatWindow, MessageList, Composer, QuickReplies, HandoffForm, TicketConfirmation
-  styles/widget.css     scoped styles; brand colours are CSS variables at the top
-mock-gateway/server.js  fake gateway for local development
-demo/                   pages that load the built dist/widget.js
+  main.tsx                 loader: data-* attrs → Shadow DOM mount → window.VettingChat
+  App.tsx                  launcher + window
+  config/audiences.ts      per-audience greeting, quick replies, labels
+  api/tokenClient.ts       calls our token server
+  hooks/useConversation.ts Direct Line connection, messages, typing, suggested actions, ticket events
+  components/              Launcher, ChatWindow, MessageList, RichText, Composer, QuickReplies, HandoffForm, TicketConfirmation
+  styles/widget.css        scoped styles; brand colours are CSS variables at the top
+server/token-server.js     production token server
+mock-copilot/server.js     local mock: token server + Direct Line + 3 agents + ticketing agent
+demo/                      pages loading the built dist/widget.js
+COPILOT_STUDIO.md          what the agent builders must implement
 ```
 
 ## Next steps
 
-- [ ] Real Chat Gateway (agent orchestration + HubSpot intake service)
+- [ ] Build the four agents in Copilot Studio (COPILOT_STUDIO.md)
+- [ ] Power Automate flow: Ticketing agent → HubSpot
 - [ ] Portal token format agreed with VETTING dev team
+- [ ] Bot protection (e.g. Turnstile) on the public site's `/token`
 - [ ] VETTING brand colours / logo
-- [ ] "My cases" panel for client and candidate (`GET /cases`)
-- [ ] Bot protection on public site
-- [ ] Hosting for `widget.js` (CDN) and the gateway
+- [ ] Host `widget.js` (CDN) and the token server
+- [ ] Bundle size: Direct Line client is ~140 KB gzipped; consider lazy-loading it on first open

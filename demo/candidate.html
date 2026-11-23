@@ -11,7 +11,7 @@
     <h1>Demo: candidate</h1>
     <p>This page loads the <strong>built</strong> bundle (<code>dist/widget.js</code>) exactly as a real site would.</p>
     <!-- Portal: load with manual init, then pass the token issued after login -->
-    <script src="../dist/widget.js" data-audience="candidate" data-region="UK" data-gateway-url="http://localhost:8787" data-manual-init="true"></script>
+    <script src="../dist/widget.js" data-audience="candidate" data-region="UK" data-token-url="http://localhost:8787/token" data-manual-init="true"></script>
     <script>
       // In the real portal this token comes from your backend after the user logs in.
       window.VettingChat.init({ authToken: "dev-token-candidate" });
