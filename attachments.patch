@@ -1,0 +1,867 @@
+diff --git a/COPILOT_STUDIO.md b/COPILOT_STUDIO.md
+index 8b78fe0..c2f1ca5 100644
+--- a/COPILOT_STUDIO.md
++++ b/COPILOT_STUDIO.md
+@@ -58,6 +58,22 @@ support-email fallback. If the agent asks a follow-up question instead, the visi
+ > *(Client agent)* / **Candidate** *(Candidate agent)* / *the "I am a" value (Public agent; ask if missing)*.
+ > Then repeat its reply line "Ticket created: <ID>" or "Ticket failed: <reason>" word for word.
+ 
++### Attachments (screenshots)
++
++Visitors can attach up to 3 images (PNG, JPG, WEBP, GIF; 5 MB each) to a message. They arrive in the
++agent as normal Direct Line attachments (`System.Activity.Attachments`).
++
++- **Turn on per front agent:** Settings → Generative AI → File processing capabilities → **File uploads**.
++  The agent can then read the screenshot (e.g. an error message) when answering.
++- **Instruction to add:** *If the user attaches a screenshot, describe what it shows and use it to help. If it
++  looks like an ID document, certificate or criminal-record information, don't read out its contents; ask them
++  to use the secure upload in their portal instead.*
++- **Not yet wired: putting the image on the HubSpot ticket.** The connected Ticket Agent only receives the
++  text the front agent writes, not the file. To attach it to the ticket: add a topic in the front agent that
++  takes `First(System.Activity.Attachments)` and passes it to an agent flow with a **File** input; the flow
++  uploads it with HubSpot's Files API and adds it to the ticket's note. Until then, the ticket description
++  should say "screenshot provided in chat".
++
+ ### Optional events (not required)
+ 
+ | Direction | Event | Use |
+diff --git a/README.md b/README.md
+index c354ddb..2f369e9 100644
+--- a/README.md
++++ b/README.md
+@@ -68,6 +68,7 @@ Things to try:
+ - *"My check link has expired"* (Candidate)
+ - *"create a ticket for jane@test.com, I can't submit my DBS check"* (any)
+ - **Talk to a person**: fill in the form → you get a reference like `VET-1001`
++- **Paperclip** (or paste a screenshot with Ctrl/Cmd + V, or drag one in): attach up to 3 images
+ - An email containing `fail` (e.g. `fail@test.com`) simulates HubSpot being down
+ 
+ The terminal shows the HubSpot ticket the Ticket Agent *would* create. The mock only recognises a few
+@@ -129,7 +130,14 @@ under Knowledge unless you want web answers.
+ This is safe because **Require secured access** (next section) means only our token server, which holds
+ the secret key, can start a chat. Client/candidate identity is checked by the token server.
+ 
+-**4. Publish** the agent. The website only ever uses the latest published version.
++**4. Turn on file uploads** (so visitors can attach screenshots)
++1. **Settings → Generative AI** → **File processing capabilities**.
++2. Turn on **File uploads** → **Save**.
++
++Without this, the widget still shows the paperclip, but the agent can't see the image.
++To hide the paperclip on a site, set `allowAttachments: false` for that audience in `src/config/audiences.ts`.
++
++**5. Publish** the agent. The website only ever uses the latest published version.
+ 
+ ---
+ 
+@@ -228,6 +236,8 @@ npx serve .             # terminal 2 → http://localhost:3000/demo/public.html
+ | Client/Candidate buttons → **401 Invalid portal token** | Test logins not enabled | Set `DEV_TEST_LOGINS=true` in `.env` and restart |
+ | Agent says it created a ticket but **no confirmation screen** | Reply didn't include the ticket number | Tighten the "repeat 'Ticket created: <ID>' word for word" instruction (3b step 1.5), publish |
+ | Ticket step says **no access** | Ticket Agent still requires sign-in | See the note under 3a |
++| Agent ignores an attached image | File uploads off | 3b step 4: **Settings → Generative AI → File uploads** on, publish |
++| **"Only images (PNG, JPG, WEBP, GIF) can be attached"** | Deliberate | Chat is for screenshots; documents go through the portal's secure upload |
+ | Changes in Copilot Studio **don't show up** | Old published version | **Publish** again and open a **new** chat |
+ | `node: bad option: --env-file` | Node too old | Install Node 20.6+ |
+ | **Port already in use** | Something still running | Ctrl + C in the old terminal |
+@@ -296,7 +306,15 @@ Issue: Cannot submit my DBS Enhanced application
+ 
+ **Agent → widget**: a reply containing `Ticket created: <ID>` shows the confirmation screen;
+ `Ticket failed` shows the support-email fallback. If the agent asks a follow-up question, the visitor
+-answers in chat. Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)**.
++answers in chat.
++
++**Attachments**: the paperclip (or paste / drag-and-drop) attaches up to **3 images, 5 MB each**
++(PNG, JPG, WEBP, GIF). They're uploaded through Direct Line's upload endpoint with the message. PDFs and
++other documents are blocked on purpose: VETTING's spec says ID documents, certificates and
++criminal-record details must go through the secure portal process, not chat. Rules live in
++`src/config/attachments.ts`.
++
++Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)**.
+ 
+ ### Security rules
+ - Secret keys live only in the token server's `.env`; the HubSpot key only in the Ticket Agent's workflows.
+@@ -305,6 +323,7 @@ answers in chat. Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_
+ - "Ticket logged" is shown only when the agent replies with a real ticket number.
+ - Agent replies are rendered as text (small safe markdown subset; no HTML).
+ - Agents never ask for passwords, ID images or criminal-record details, and never make suitability decisions.
++- Chat attachments are images only, with a visible "screenshots only" notice; documents go through the portal.
+ 
+ ### Project structure
+ 
+@@ -312,7 +331,8 @@ answers in chat. Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_
+ src/
+   main.tsx                 loader: data-* attrs → Shadow DOM → window.VettingChat
+   App.tsx                  launcher + window
+-  config/audiences.ts      per-audience greeting, quick replies, labels
++  config/audiences.ts      per-audience greeting, quick replies, labels, allowAttachments
++  config/attachments.ts    allowed file types, size and count limits, privacy notice
+   api/tokenClient.ts       calls the token server
+   hooks/useConversation.ts Direct Line connection, messages, typing, ticket detection
+   components/              Launcher, ChatWindow, MessageList, RichText, Composer, QuickReplies, HandoffForm, TicketConfirmation
+diff --git a/mock-copilot/server.js b/mock-copilot/server.js
+index 0529d35..2c40cd5 100644
+--- a/mock-copilot/server.js
++++ b/mock-copilot/server.js
+@@ -10,6 +10,7 @@
+ 
+ import express from "express";
+ import cors from "cors";
++import multer from "multer";
+ import { randomUUID } from "node:crypto";
+ 
+ const PORT = Number(process.env.PORT ?? 8787);
+@@ -83,6 +84,44 @@ app.get("/v3/directline/conversations/:id/activities", (req, res) => {
+   res.json({ activities: c.activities.slice(from), watermark: String(c.activities.length) });
+ });
+ 
++// Attachments: the Direct Line client POSTs multipart/form-data with one "activity" part (JSON) and
++// one "file" part per attachment. Real Copilot Studio reads images when "File uploads" is turned on.
++/** fileId → { buffer, type, name } (in memory, mock only) */
++const files = new Map();
++const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 4 } });
++
++app.post("/v3/directline/conversations/:id/upload", upload.any(), async (req, res) => {
++  const who = auth(req, res);
++  if (!who) return;
++  const convId = req.params.id;
++  const c = conversations.get(convId);
++  if (!c) return res.status(404).end();
++  if (req.query.userId !== who.userId) return res.status(400).json({ error: "userId does not match token" });
++
++  const parts = req.files ?? [];
++  const activityPart = parts.find((p) => p.fieldname === "activity");
++  const activity = activityPart ? JSON.parse(activityPart.buffer.toString("utf8")) : { type: "message" };
++  const attachments = parts
++    .filter((p) => p.fieldname === "file")
++    .map((p) => {
++      const fileId = randomUUID();
++      files.set(fileId, { buffer: p.buffer, type: p.mimetype, name: p.originalname });
++      return { contentType: p.mimetype, contentUrl: `${BASE}/files/${fileId}`, name: p.originalname, size: p.size };
++    });
++
++  const id = `${convId}|${c.activities.length}`;
++  c.activities.push({ ...activity, attachments, id, from: { id: who.userId }, conversation: { id: convId } });
++  (c.uploads ??= []).push(...attachments);
++  res.json({ id });
++  void frontAgent(convId, { ...activity, attachments }).catch((e) => console.error(e));
++});
++
++app.get("/files/:fileId", (req, res) => {
++  const f = files.get(req.params.fileId);
++  if (!f) return res.status(404).end();
++  res.type(f.type).send(f.buffer);
++});
++
+ app.post("/v3/directline/conversations/:id/activities", (req, res) => {
+   const who = auth(req, res);
+   if (!who) return;
+@@ -145,6 +184,18 @@ async function frontAgent(convId, activity) {
+   botSays(convId, { type: "typing" });
+   await sleep(700); // Copilot Studio doesn't stream over Direct Line; replies arrive whole.
+ 
++  if (activity.attachments?.length) {
++    const names = activity.attachments.map((a) => `${a.name} (${Math.ceil((a.size ?? 0) / 1024)} KB)`).join(", ");
++    console.log(`[${c.audience} agent] received ${activity.attachments.length} attachment(s): ${names}`);
++    botSays(convId, {
++      type: "message",
++      text:
++        `(mock **${c.audience}** agent) Thanks, I've received your screenshot${activity.attachments.length > 1 ? "s" : ""}: ${activity.attachments.map((a) => a.name).join(", ")}. ` +
++        "The real agent will look at the image. If you'd like, I can pass it to our support team.",
++    });
++    if (!activity.text) return;
++  }
++
+   // Ticket requests arrive as chat messages: the handoff form ("Please create a support ticket…")
+   // or free text like "create a ticket for jane@test.com for …". The front agent passes them to the
+   // Ticketing agent (connected agent) and repeats its "Ticket created: <id>" reply.
+@@ -169,6 +220,7 @@ async function frontAgent(convId, activity) {
+     }
+     try {
+       const ticketRef = await ticketingAgent({
++        attachments: (c.uploads ?? []).map((a) => a.name),
+         conversationId: convId,
+         category,
+         name: field("Name") ?? "(not given)",
+@@ -211,7 +263,7 @@ const ticketsByConversation = new Map();
+ let counter = 1000;
+ 
+ async function ticketingAgent(input) {
+-  const { conversationId, category, name, email, issue, region } = input;
++  const { conversationId, category, name, email, issue, region, attachments = [] } = input;
+   if (!name || !email || !issue || !category) throw new Error("Missing required ticket inputs");
+   await sleep(600);
+   if (String(email).includes("fail")) throw new Error("HubSpot unavailable (simulated)");
+@@ -237,6 +289,8 @@ async function ticketingAgent(input) {
+       description: issue,
+       correlationId: conversationId,
+     },
++    // Real flow: upload each file to HubSpot (Files API) and attach it to the ticket note.
++    attachments,
+   });
+   return ticketRef;
+ }
+diff --git a/package-lock.json b/package-lock.json
+index dc0f1af..33f4353 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -20,6 +20,7 @@
+         "concurrently": "^9.0.1",
+         "cors": "^2.8.5",
+         "express": "^4.21.0",
++        "multer": "^2.5.0",
+         "typescript": "^5.5.4",
+         "vite": "^5.4.8"
+       }
+@@ -1286,6 +1287,13 @@
+         "url": "https://github.com/chalk/ansi-styles?sponsor=1"
+       }
+     },
++    "node_modules/append-field": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz",
++      "integrity": "sha512-klpgFSWLW1ZEs8svjfb7g4qWY0YS5imI82dTg+QahUvJ8YqAY0P10Uk8tTyh9ZGuYEZEMaeJYCF5BFuX552hsw==",
++      "dev": true,
++      "license": "MIT"
++    },
+     "node_modules/array-flatten": {
+       "version": "1.1.1",
+       "resolved": "https://registry.npmjs.org/array-flatten/-/array-flatten-1.1.1.tgz",
+@@ -1465,6 +1473,18 @@
+         "ieee754": "^1.2.1"
+       }
+     },
++    "node_modules/busboy": {
++      "version": "1.6.0",
++      "resolved": "https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz",
++      "integrity": "sha512-8SFQbg/0hQ9xy3UNTB0YEnsNBbWfhf7RtnzpL7TkBiTBRfrQ9Fxcnz7VJsleJpyp6rVLvXiuORqjlHi5q+PYuA==",
++      "dev": true,
++      "dependencies": {
++        "streamsearch": "^1.1.0"
++      },
++      "engines": {
++        "node": ">=10.16.0"
++      }
++    },
+     "node_modules/bytes": {
+       "version": "3.1.2",
+       "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz",
+@@ -2386,6 +2406,25 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/multer": {
++      "version": "2.5.0",
++      "resolved": "https://registry.npmjs.org/multer/-/multer-2.5.0.tgz",
++      "integrity": "sha512-BsqOzYGVq49JcW2IzoSAxeKYRevb+dGGPPWleOR8Lrlk4igwxu1/9pwSXlByhCb7MVZDrNJFC0IBP5/O5nLYRw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "append-field": "^1.0.0",
++        "busboy": "^1.6.0",
++        "type-is": "^1.6.18"
++      },
++      "engines": {
++        "node": ">= 10.16.0"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/express"
++      }
++    },
+     "node_modules/nanoid": {
+       "version": "3.3.20",
+       "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.20.tgz",
+@@ -2921,6 +2960,15 @@
+         "node": ">= 0.8"
+       }
+     },
++    "node_modules/streamsearch": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/streamsearch/-/streamsearch-1.1.0.tgz",
++      "integrity": "sha512-Mcc5wHehp9aXz1ax6bZUyY5afg9u2rv5cqQI3mRrYkGC8rW2hM02jWuwjtL++LS5qinSyhj2QfLyNsuc+VsExg==",
++      "dev": true,
++      "engines": {
++        "node": ">=10.0.0"
++      }
++    },
+     "node_modules/string-width": {
+       "version": "4.2.3",
+       "resolved": "https://registry.npmjs.org/string-width/-/string-width-4.2.3.tgz",
+diff --git a/package.json b/package.json
+index 12741e7..12a3db2 100644
+--- a/package.json
++++ b/package.json
+@@ -27,6 +27,7 @@
+     "concurrently": "^9.0.1",
+     "cors": "^2.8.5",
+     "express": "^4.21.0",
++    "multer": "^2.5.0",
+     "typescript": "^5.5.4",
+     "vite": "^5.4.8"
+   }
+diff --git a/src/components/ChatWindow.tsx b/src/components/ChatWindow.tsx
+index d1596dc..64f74b5 100644
+--- a/src/components/ChatWindow.tsx
++++ b/src/components/ChatWindow.tsx
+@@ -40,12 +40,12 @@ export function ChatWindow({ config, onClose }: Props) {
+     return () => window.removeEventListener("keydown", onKey);
+   }, [onClose]);
+ 
+-  const handleSend = (text: string) => {
+-    if (wantsHuman(text)) {
++  const handleSend = (text: string, files: File[] = []) => {
++    if (!files.length && wantsHuman(text)) {
+       setView("handoff");
+       return;
+     }
+-    convo.send(text);
++    convo.send(text, files);
+   };
+ 
+   const handleHandoff = async (values: HandoffValues) => {
+@@ -101,6 +101,7 @@ export function ChatWindow({ config, onClose }: Props) {
+           )}
+           <Composer
+             onSend={handleSend}
++            allowAttachments={settings.allowAttachments}
+             disabled={!online}
+             placeholder={convo.state === "connecting" ? "Connecting…" : undefined}
+           />
+diff --git a/src/components/Composer.tsx b/src/components/Composer.tsx
+index 74df3ef..f6e2805 100644
+--- a/src/components/Composer.tsx
++++ b/src/components/Composer.tsx
+@@ -1,21 +1,56 @@
+-import { useState, type FormEvent, type KeyboardEvent } from "react";
++import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
++import { ATTACHMENT_RULES, checkFiles, type PendingFile } from "../config/attachments";
+ 
+ interface Props {
+-  onSend: (text: string) => void;
++  onSend: (text: string, files: File[]) => void;
+   disabled?: boolean;
+   placeholder?: string;
++  allowAttachments?: boolean;
+ }
+ 
+ const MAX_LENGTH = 2000;
++const uid = () => Math.random().toString(36).slice(2, 10);
+ 
+-export function Composer({ onSend, disabled, placeholder = "Type your message…" }: Props) {
++export function Composer({ onSend, disabled, placeholder = "Type your message…", allowAttachments = false }: Props) {
+   const [text, setText] = useState("");
++  const [files, setFiles] = useState<PendingFile[]>([]);
++  const [errors, setErrors] = useState<string[]>([]);
++  const [dragging, setDragging] = useState(false);
++  const fileInput = useRef<HTMLInputElement>(null);
++
++  // Free preview URLs for files removed before sending.
++  const filesRef = useRef(files);
++  filesRef.current = files;
++  useEffect(() => () => filesRef.current.forEach((f) => URL.revokeObjectURL(f.url)), []);
++
++  const addFiles = (incoming: File[]) => {
++    if (!allowAttachments || !incoming.length) return;
++    const { ok, errors } = checkFiles(incoming, files.length);
++    setErrors(errors);
++    if (ok.length) {
++      setFiles((prev) => [...prev, ...ok.map((file) => ({ id: uid(), file, url: URL.createObjectURL(file) }))]);
++    }
++  };
++
++  const removeFile = (id: string) => {
++    setFiles((prev) => {
++      const gone = prev.find((f) => f.id === id);
++      if (gone) URL.revokeObjectURL(gone.url);
++      return prev.filter((f) => f.id !== id);
++    });
++    setErrors([]);
++  };
++
++  const canSend = !disabled && (text.trim().length > 0 || files.length > 0);
+ 
+   const submit = (e?: FormEvent) => {
+     e?.preventDefault();
+-    if (!text.trim() || disabled) return;
+-    onSend(text);
++    if (!canSend) return;
++    // The object URLs now belong to the sent message (shown in the chat), so they aren't revoked here.
++    onSend(text, files.map((f) => f.file));
+     setText("");
++    setFiles([]);
++    setErrors([]);
+   };
+ 
+   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+@@ -26,24 +61,111 @@ export function Composer({ onSend, disabled, placeholder = "Type your message…
+     }
+   };
+ 
++  // Pasting a screenshot (Ctrl/Cmd + V) attaches it.
++  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
++    const pasted = Array.from(e.clipboardData.files ?? []);
++    if (allowAttachments && pasted.length) {
++      e.preventDefault();
++      addFiles(pasted.map((f, i) => (f.name && f.name !== "image.png" ? f : new File([f], `screenshot-${i + 1}.png`, { type: f.type }))));
++    }
++  };
++
++  const dragProps = allowAttachments
++    ? {
++        onDragOver: (e: DragEvent) => {
++          e.preventDefault();
++          setDragging(true);
++        },
++        onDragLeave: () => setDragging(false),
++        onDrop: (e: DragEvent) => {
++          e.preventDefault();
++          setDragging(false);
++          addFiles(Array.from(e.dataTransfer.files));
++        },
++      }
++    : {};
++
+   return (
+-    <form className="vc-composer" onSubmit={submit}>
+-      <label htmlFor="vc-input" className="vc-sr-only">
+-        Type your message
+-      </label>
+-      <textarea
+-        id="vc-input"
+-        rows={1}
+-        value={text}
+-        maxLength={MAX_LENGTH}
+-        placeholder={placeholder}
+-        disabled={disabled}
+-        onChange={(e) => setText(e.target.value)}
+-        onKeyDown={onKeyDown}
+-      />
+-      <button type="submit" className="vc-send" disabled={!text.trim() || disabled} aria-label="Send message">
+-        ➤
+-      </button>
+-    </form>
++    <div className={`vc-composer-wrap${dragging ? " vc-dragging" : ""}`} {...dragProps}>
++      {allowAttachments && (files.length > 0 || errors.length > 0) && (
++        <div className="vc-attach-tray">
++          {files.length > 0 && (
++            <ul className="vc-previews" aria-label="Attached images">
++              {files.map((f) => (
++                <li key={f.id} className="vc-preview">
++                  <img src={f.url} alt="" />
++                  <span className="vc-preview-name" title={f.file.name}>
++                    {f.file.name}
++                  </span>
++                  <button type="button" className="vc-preview-remove" onClick={() => removeFile(f.id)} aria-label={`Remove ${f.file.name}`}>
++                    ✕
++                  </button>
++                </li>
++              ))}
++            </ul>
++          )}
++          {files.length > 0 && <p className="vc-hint">{ATTACHMENT_RULES.notice}</p>}
++          {errors.map((err) => (
++            <p key={err} className="vc-field-error" role="alert">
++              {err}
++            </p>
++          ))}
++        </div>
++      )}
++
++      <form className="vc-composer" onSubmit={submit}>
++        {allowAttachments && (
++          <>
++            <button
++              type="button"
++              className="vc-attach-btn"
++              onClick={() => fileInput.current?.click()}
++              disabled={disabled || files.length >= ATTACHMENT_RULES.maxFiles}
++              aria-label="Attach a screenshot"
++              title={`Attach a screenshot (${ATTACHMENT_RULES.notice})`}
++            >
++              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
++                <path
++                  d="M21 11.5l-8.6 8.6a5 5 0 01-7.1-7.1l8.6-8.6a3.3 3.3 0 014.7 4.7l-8.6 8.6a1.7 1.7 0 01-2.4-2.4l7.9-7.9"
++                  fill="none"
++                  stroke="currentColor"
++                  strokeWidth="1.8"
++                  strokeLinecap="round"
++                  strokeLinejoin="round"
++                />
++              </svg>
++            </button>
++            <input
++              ref={fileInput}
++              type="file"
++              accept={ATTACHMENT_RULES.accept}
++              multiple
++              hidden
++              onChange={(e) => {
++                addFiles(Array.from(e.target.files ?? []));
++                e.target.value = ""; // allow picking the same file again
++              }}
++            />
++          </>
++        )}
++        <label htmlFor="vc-input" className="vc-sr-only">
++          Type your message
++        </label>
++        <textarea
++          id="vc-input"
++          rows={1}
++          value={text}
++          maxLength={MAX_LENGTH}
++          placeholder={files.length ? "Add a message (optional)…" : placeholder}
++          disabled={disabled}
++          onChange={(e) => setText(e.target.value)}
++          onKeyDown={onKeyDown}
++          onPaste={onPaste}
++        />
++        <button type="submit" className="vc-send" disabled={!canSend} aria-label="Send message">
++          ➤
++        </button>
++      </form>
++    </div>
+   );
+ }
+diff --git a/src/components/MessageList.tsx b/src/components/MessageList.tsx
+index b1ab2ff..38c2921 100644
+--- a/src/components/MessageList.tsx
++++ b/src/components/MessageList.tsx
+@@ -1,5 +1,5 @@
+ import { useEffect, useRef } from "react";
+-import type { ChatMessage } from "../types";
++import type { ChatAttachment, ChatMessage } from "../types";
+ import { RichText } from "./RichText";
+ 
+ export function MessageList({ messages, typing }: { messages: ChatMessage[]; typing: boolean }) {
+@@ -15,7 +15,8 @@ export function MessageList({ messages, typing }: { messages: ChatMessage[]; typ
+         <div key={m.id} className={`vc-msg vc-msg--${m.role}`}>
+           {m.role === "assistant" && <span className="vc-sr-only">Support assistant: </span>}
+           {m.role === "user" && <span className="vc-sr-only">You: </span>}
+-          {m.role === "assistant" ? <RichText text={m.text} /> : m.text}
++          {m.attachments?.length ? <Attachments items={m.attachments} /> : null}
++          {m.text && (m.role === "assistant" ? <RichText text={m.text} /> : m.text)}
+         </div>
+       ))}
+       {typing && (
+@@ -31,3 +32,21 @@ export function MessageList({ messages, typing }: { messages: ChatMessage[]; typ
+     </div>
+   );
+ }
++
++function Attachments({ items }: { items: ChatAttachment[] }) {
++  return (
++    <div className="vc-msg-files">
++      {items.map((a, i) =>
++        a.contentType.startsWith("image/") ? (
++          <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="vc-msg-image" title={a.name}>
++            <img src={a.url} alt={a.name} />
++          </a>
++        ) : (
++          <a key={i} href={a.url} target="_blank" rel="noopener noreferrer" className="vc-msg-file">
++            📎 {a.name}
++          </a>
++        ),
++      )}
++    </div>
++  );
++}
+diff --git a/src/config/attachments.ts b/src/config/attachments.ts
+new file mode 100644
+index 0000000..f6c97e5
+--- /dev/null
++++ b/src/config/attachments.ts
+@@ -0,0 +1,43 @@
++/**
++ * Attachment rules. Kept deliberately narrow: VETTING's integration spec says ID documents,
++ * certificates and criminal-record details must go through the secure upload process in the
++ * portal, never through chat. Chat attachments are for screenshots of a problem.
++ */
++export const ATTACHMENT_RULES = {
++  /** MIME types accepted. Copilot Studio can read PNG, JPEG, WEBP and non-animated GIF. */
++  acceptedTypes: ["image/png", "image/jpeg", "image/webp", "image/gif"],
++  /** Value for the file input's `accept` attribute. */
++  accept: ".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif",
++  maxFiles: 3,
++  maxBytes: 5 * 1024 * 1024,
++  notice: "Screenshots only. Please don't upload ID documents, certificates or criminal-record information.",
++};
++
++export interface PendingFile {
++  id: string;
++  file: File;
++  /** Object URL used for the preview and, when sending, by the Direct Line uploader. */
++  url: string;
++}
++
++const formatSize = (bytes: number) =>
++  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
++
++/** Splits files into ones we accept and human-readable reasons for the ones we don't. */
++export function checkFiles(incoming: File[], alreadySelected: number): { ok: File[]; errors: string[] } {
++  const ok: File[] = [];
++  const errors: string[] = [];
++  for (const f of incoming) {
++    if (!ATTACHMENT_RULES.acceptedTypes.includes(f.type)) {
++      errors.push(`${f.name || "That file"}: only images (PNG, JPG, WEBP, GIF) can be attached.`);
++    } else if (f.size > ATTACHMENT_RULES.maxBytes) {
++      errors.push(`${f.name}: ${formatSize(f.size)} is too large (max ${formatSize(ATTACHMENT_RULES.maxBytes)}).`);
++    } else if (alreadySelected + ok.length >= ATTACHMENT_RULES.maxFiles) {
++      errors.push(`You can attach up to ${ATTACHMENT_RULES.maxFiles} images per message.`);
++      break;
++    } else {
++      ok.push(f);
++    }
++  }
++  return { ok, errors };
++}
+diff --git a/src/config/audiences.ts b/src/config/audiences.ts
+index 7120204..44d6943 100644
+--- a/src/config/audiences.ts
++++ b/src/config/audiences.ts
+@@ -9,6 +9,8 @@ export interface AudienceSettings {
+   askVisitorType: boolean;
+   /** Logged-in portals may show the user's own open cases. */
+   canViewCases: boolean;
++  /** Show the paperclip so visitors can attach screenshots. Also needs "File uploads" on in Copilot Studio. */
++  allowAttachments: boolean;
+ }
+ 
+ // UI copy only. Which agent actually answers is decided server-side from the verified token.
+@@ -26,6 +28,7 @@ export const AUDIENCES: Record<Audience, AudienceSettings> = {
+     ],
+     askVisitorType: true,
+     canViewCases: false,
++    allowAttachments: true,
+   },
+   client: {
+     title: "Client Support",
+@@ -40,6 +43,7 @@ export const AUDIENCES: Record<Audience, AudienceSettings> = {
+     ],
+     askVisitorType: false,
+     canViewCases: true,
++    allowAttachments: true,
+   },
+   candidate: {
+     title: "Candidate Help",
+@@ -54,6 +58,7 @@ export const AUDIENCES: Record<Audience, AudienceSettings> = {
+     ],
+     askVisitorType: false,
+     canViewCases: true,
++    allowAttachments: true,
+   },
+ };
+ 
+diff --git a/src/hooks/useConversation.ts b/src/hooks/useConversation.ts
+index 4fe04ec..3379669 100644
+--- a/src/hooks/useConversation.ts
++++ b/src/hooks/useConversation.ts
+@@ -1,7 +1,7 @@
+ import { ConnectionStatus, DirectLine } from "botframework-directlinejs";
+ import { useCallback, useEffect, useRef, useState } from "react";
+ import { fetchDirectLineToken } from "../api/tokenClient";
+-import { EVENTS, type Audience, type ChatMessage, type HandoffRequest, type WidgetConfig } from "../types";
++import { EVENTS, type Audience, type ChatAttachment, type ChatMessage, type HandoffRequest, type WidgetConfig } from "../types";
+ 
+ const uid = () => Math.random().toString(36).slice(2, 10);
+ const REPLY_TIMEOUT_MS = 30_000;
+@@ -17,7 +17,7 @@ interface IncomingActivity {
+   text?: string;
+   name?: string;
+   value?: unknown;
+-  attachments?: { contentType?: string; content?: unknown }[];
++  attachments?: { contentType?: string; content?: unknown; contentUrl?: string; name?: string }[];
+   suggestedActions?: { actions?: { title?: string; value?: unknown }[] };
+ }
+ 
+@@ -87,8 +87,8 @@ export function useConversation(config: WidgetConfig, greeting: string) {
+   const pendingTicketRef = useRef<PendingTicket | null>(null);
+   const replyTimerRef = useRef<number | undefined>(undefined);
+ 
+-  const addMessage = useCallback((role: ChatMessage["role"], text: string) => {
+-    setMessages((m) => [...m, { id: uid(), role, text }]);
++  const addMessage = useCallback((role: ChatMessage["role"], text: string, attachments?: ChatAttachment[]) => {
++    setMessages((m) => [...m, { id: uid(), role, text, ...(attachments?.length ? { attachments } : {}) }]);
+   }, []);
+ 
+   const stopWaiting = () => {
+@@ -130,7 +130,11 @@ export function useConversation(config: WidgetConfig, greeting: string) {
+ 
+       if (a.type === "message") {
+         const text = [a.text, textFromAttachments(a.attachments)].filter(Boolean).join("\n").trim();
+-        if (text) addMessage("assistant", text);
++        // Files the agent sends back (e.g. an image), only from https URLs.
++        const files: ChatAttachment[] = (a.attachments ?? [])
++          .filter((x) => typeof x.contentUrl === "string" && /^https:\/\//.test(x.contentUrl))
++          .map((x) => ({ name: x.name ?? "file", contentType: x.contentType ?? "", url: x.contentUrl as string }));
++        if (text || files.length) addMessage("assistant", text, files);
+         window.clearTimeout(typingTimer);
+         if (text && pendingTicketRef.current) {
+           const ref = findTicketRef(text);
+@@ -201,12 +205,20 @@ export function useConversation(config: WidgetConfig, greeting: string) {
+   }, [config.tokenUrl, config.authToken, config.audience, config.region, addMessage]);
+ 
+   const send = useCallback(
+-    (text: string) => {
++    (text: string, files: File[] = []) => {
+       const trimmed = text.trim();
+       const dl = dlRef.current;
+-      if (!trimmed || !dl || state !== "online") return;
++      if ((!trimmed && !files.length) || !dl || state !== "online") return;
+ 
+-      addMessage("user", trimmed);
++      // Object URLs serve both the preview in the chat and the Direct Line uploader,
++      // which reads each contentUrl and uploads it to /conversations/{id}/upload.
++      const attachments: ChatAttachment[] = files.map((f) => ({
++        name: f.name,
++        contentType: f.type,
++        url: URL.createObjectURL(f),
++      }));
++
++      addMessage("user", trimmed, attachments);
+       setSuggestions([]);
+       setWaitingForReply(true);
+       window.clearTimeout(replyTimerRef.current);
+@@ -220,10 +232,18 @@ export function useConversation(config: WidgetConfig, greeting: string) {
+         from: { id: userIdRef.current },
+         text: trimmed,
+         locale: navigator.language,
++        ...(attachments.length && {
++          attachments: attachments.map((a) => ({ contentType: a.contentType, contentUrl: a.url, name: a.name })),
++        }),
+       } as never).subscribe({
+         error: () => {
+           stopWaiting();
+-          addMessage("system", "Your message couldn't be sent. Please check your connection and try again.");
++          addMessage(
++            "system",
++            attachments.length
++              ? "Your image couldn't be sent. Please try again, or describe the problem in words."
++              : "Your message couldn't be sent. Please check your connection and try again.",
++          );
+         },
+       });
+     },
+diff --git a/src/styles/widget.css b/src/styles/widget.css
+index 66a5a38..9987d11 100644
+--- a/src/styles/widget.css
++++ b/src/styles/widget.css
+@@ -396,3 +396,96 @@ button:disabled {
+ .vc-msg--user a {
+   color: inherit;
+ }
++
++/* Attachments */
++.vc-composer-wrap {
++  border-top: 1px solid var(--vc-border);
++  background: var(--vc-bg);
++}
++.vc-composer-wrap .vc-composer {
++  border-top: none;
++}
++.vc-dragging {
++  outline: 2px dashed var(--vc-primary);
++  outline-offset: -4px;
++}
++.vc-attach-tray {
++  padding: 10px 12px 0;
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++}
++.vc-previews {
++  list-style: none;
++  margin: 0;
++  padding: 0;
++  display: flex;
++  gap: 8px;
++  flex-wrap: wrap;
++}
++.vc-preview {
++  position: relative;
++  width: 76px;
++  display: flex;
++  flex-direction: column;
++  gap: 2px;
++}
++.vc-preview img {
++  width: 76px;
++  height: 56px;
++  object-fit: cover;
++  border-radius: 8px;
++  border: 1px solid var(--vc-border);
++}
++.vc-preview-name {
++  font-size: 11px;
++  color: var(--vc-muted);
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++.vc-preview-remove {
++  position: absolute;
++  top: -6px;
++  right: -6px;
++  width: 20px;
++  height: 20px;
++  border-radius: 50%;
++  border: none;
++  background: var(--vc-text);
++  color: #fff;
++  font-size: 11px;
++  line-height: 20px;
++  padding: 0;
++}
++.vc-attach-btn {
++  width: 40px;
++  border: 1px solid var(--vc-border);
++  border-radius: 10px;
++  background: var(--vc-bg);
++  color: var(--vc-primary);
++  display: grid;
++  place-items: center;
++}
++.vc-attach-btn:hover:not(:disabled) {
++  background: var(--vc-surface);
++}
++.vc-msg-files {
++  display: flex;
++  gap: 6px;
++  flex-wrap: wrap;
++}
++.vc-msg-files:not(:last-child) {
++  margin-bottom: 6px;
++}
++.vc-msg-image img {
++  max-width: 160px;
++  max-height: 120px;
++  border-radius: 8px;
++  display: block;
++  background: #fff;
++}
++.vc-msg-file {
++  color: inherit;
++  text-decoration: underline;
++}
+diff --git a/src/types.ts b/src/types.ts
+index 9c677b6..180b46d 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -15,10 +15,18 @@ export interface WidgetConfig {
+ 
+ export type Role = "user" | "assistant" | "system";
+ 
++export interface ChatAttachment {
++  name: string;
++  contentType: string;
++  /** Object URL for the visitor's own uploads; https URL for files sent by the agent. */
++  url: string;
++}
++
+ export interface ChatMessage {
+   id: string;
+   role: Role;
+   text: string;
++  attachments?: ChatAttachment[];
+ }
+ 
+ /**

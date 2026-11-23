@@ -10,6 +10,7 @@
 
 import express from "express";
 import cors from "cors";
+import multer from "multer";
 import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -83,6 +84,44 @@ app.get("/v3/directline/conversations/:id/activities", (req, res) => {
   res.json({ activities: c.activities.slice(from), watermark: String(c.activities.length) });
 });
 
+// Attachments: the Direct Line client POSTs multipart/form-data with one "activity" part (JSON) and
+// one "file" part per attachment. Real Copilot Studio reads images when "File uploads" is turned on.
+/** fileId → { buffer, type, name } (in memory, mock only) */
+const files = new Map();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 4 } });
+
+app.post("/v3/directline/conversations/:id/upload", upload.any(), async (req, res) => {
+  const who = auth(req, res);
+  if (!who) return;
+  const convId = req.params.id;
+  const c = conversations.get(convId);
+  if (!c) return res.status(404).end();
+  if (req.query.userId !== who.userId) return res.status(400).json({ error: "userId does not match token" });
+
+  const parts = req.files ?? [];
+  const activityPart = parts.find((p) => p.fieldname === "activity");
+  const activity = activityPart ? JSON.parse(activityPart.buffer.toString("utf8")) : { type: "message" };
+  const attachments = parts
+    .filter((p) => p.fieldname === "file")
+    .map((p) => {
+      const fileId = randomUUID();
+      files.set(fileId, { buffer: p.buffer, type: p.mimetype, name: p.originalname });
+      return { contentType: p.mimetype, contentUrl: `${BASE}/files/${fileId}`, name: p.originalname, size: p.size };
+    });
+
+  const id = `${convId}|${c.activities.length}`;
+  c.activities.push({ ...activity, attachments, id, from: { id: who.userId }, conversation: { id: convId } });
+  (c.uploads ??= []).push(...attachments);
+  res.json({ id });
+  void frontAgent(convId, { ...activity, attachments }).catch((e) => console.error(e));
+});
+
+app.get("/files/:fileId", (req, res) => {
+  const f = files.get(req.params.fileId);
+  if (!f) return res.status(404).end();
+  res.type(f.type).send(f.buffer);
+});
+
 app.post("/v3/directline/conversations/:id/activities", (req, res) => {
   const who = auth(req, res);
   if (!who) return;
@@ -145,6 +184,18 @@ async function frontAgent(convId, activity) {
   botSays(convId, { type: "typing" });
   await sleep(700); // Copilot Studio doesn't stream over Direct Line; replies arrive whole.
 
+  if (activity.attachments?.length) {
+    const names = activity.attachments.map((a) => `${a.name} (${Math.ceil((a.size ?? 0) / 1024)} KB)`).join(", ");
+    console.log(`[${c.audience} agent] received ${activity.attachments.length} attachment(s): ${names}`);
+    botSays(convId, {
+      type: "message",
+      text:
+        `(mock **${c.audience}** agent) Thanks, I've received your screenshot${activity.attachments.length > 1 ? "s" : ""}: ${activity.attachments.map((a) => a.name).join(", ")}. ` +
+        "The real agent will look at the image. If you'd like, I can pass it to our support team.",
+    });
+    if (!activity.text) return;
+  }
+
   // Ticket requests arrive as chat messages: the handoff form ("Please create a support ticket…")
   // or free text like "create a ticket for jane@test.com for …". The front agent passes them to the
   // Ticketing agent (connected agent) and repeats its "Ticket created: <id>" reply.
@@ -169,6 +220,7 @@ async function frontAgent(convId, activity) {
     }
     try {
       const ticketRef = await ticketingAgent({
+        attachments: (c.uploads ?? []).map((a) => a.name),
         conversationId: convId,
         category,
         name: field("Name") ?? "(not given)",
@@ -211,7 +263,7 @@ const ticketsByConversation = new Map();
 let counter = 1000;
 
 async function ticketingAgent(input) {
-  const { conversationId, category, name, email, issue, region } = input;
+  const { conversationId, category, name, email, issue, region, attachments = [] } = input;
   if (!name || !email || !issue || !category) throw new Error("Missing required ticket inputs");
   await sleep(600);
   if (String(email).includes("fail")) throw new Error("HubSpot unavailable (simulated)");
@@ -237,6 +289,8 @@ async function ticketingAgent(input) {
       description: issue,
       correlationId: conversationId,
     },
+    // Real flow: upload each file to HubSpot (Files API) and attach it to the ticket note.
+    attachments,
   });
   return ticketRef;
 }

@@ -40,12 +40,12 @@ export function ChatWindow({ config, onClose }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const handleSend = (text: string) => {
-    if (wantsHuman(text)) {
+  const handleSend = (text: string, files: File[] = []) => {
+    if (!files.length && wantsHuman(text)) {
       setView("handoff");
       return;
     }
-    convo.send(text);
+    convo.send(text, files);
   };
 
   const handleHandoff = async (values: HandoffValues) => {
@@ -101,6 +101,7 @@ export function ChatWindow({ config, onClose }: Props) {
           )}
           <Composer
             onSend={handleSend}
+            allowAttachments={settings.allowAttachments}
             disabled={!online}
             placeholder={convo.state === "connecting" ? "Connecting…" : undefined}
           />

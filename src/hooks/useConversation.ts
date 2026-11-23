@@ -1,7 +1,7 @@
 import { ConnectionStatus, DirectLine } from "botframework-directlinejs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchDirectLineToken } from "../api/tokenClient";
-import { EVENTS, type Audience, type ChatMessage, type HandoffRequest, type WidgetConfig } from "../types";
+import { EVENTS, type Audience, type ChatAttachment, type ChatMessage, type HandoffRequest, type WidgetConfig } from "../types";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const REPLY_TIMEOUT_MS = 30_000;
@@ -17,7 +17,7 @@ interface IncomingActivity {
   text?: string;
   name?: string;
   value?: unknown;
-  attachments?: { contentType?: string; content?: unknown }[];
+  attachments?: { contentType?: string; content?: unknown; contentUrl?: string; name?: string }[];
   suggestedActions?: { actions?: { title?: string; value?: unknown }[] };
 }
 
@@ -87,8 +87,8 @@ export function useConversation(config: WidgetConfig, greeting: string) {
   const pendingTicketRef = useRef<PendingTicket | null>(null);
   const replyTimerRef = useRef<number | undefined>(undefined);
 
-  const addMessage = useCallback((role: ChatMessage["role"], text: string) => {
-    setMessages((m) => [...m, { id: uid(), role, text }]);
+  const addMessage = useCallback((role: ChatMessage["role"], text: string, attachments?: ChatAttachment[]) => {
+    setMessages((m) => [...m, { id: uid(), role, text, ...(attachments?.length ? { attachments } : {}) }]);
   }, []);
 
   const stopWaiting = () => {
@@ -130,7 +130,11 @@ export function useConversation(config: WidgetConfig, greeting: string) {
 
       if (a.type === "message") {
         const text = [a.text, textFromAttachments(a.attachments)].filter(Boolean).join("\n").trim();
-        if (text) addMessage("assistant", text);
+        // Files the agent sends back (e.g. an image), only from https URLs.
+        const files: ChatAttachment[] = (a.attachments ?? [])
+          .filter((x) => typeof x.contentUrl === "string" && /^https:\/\//.test(x.contentUrl))
+          .map((x) => ({ name: x.name ?? "file", contentType: x.contentType ?? "", url: x.contentUrl as string }));
+        if (text || files.length) addMessage("assistant", text, files);
         window.clearTimeout(typingTimer);
         if (text && pendingTicketRef.current) {
           const ref = findTicketRef(text);
@@ -201,12 +205,20 @@ export function useConversation(config: WidgetConfig, greeting: string) {
   }, [config.tokenUrl, config.authToken, config.audience, config.region, addMessage]);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, files: File[] = []) => {
       const trimmed = text.trim();
       const dl = dlRef.current;
-      if (!trimmed || !dl || state !== "online") return;
+      if ((!trimmed && !files.length) || !dl || state !== "online") return;
 
-      addMessage("user", trimmed);
+      // Object URLs serve both the preview in the chat and the Direct Line uploader,
+      // which reads each contentUrl and uploads it to /conversations/{id}/upload.
+      const attachments: ChatAttachment[] = files.map((f) => ({
+        name: f.name,
+        contentType: f.type,
+        url: URL.createObjectURL(f),
+      }));
+
+      addMessage("user", trimmed, attachments);
       setSuggestions([]);
       setWaitingForReply(true);
       window.clearTimeout(replyTimerRef.current);
@@ -220,10 +232,18 @@ export function useConversation(config: WidgetConfig, greeting: string) {
         from: { id: userIdRef.current },
         text: trimmed,
         locale: navigator.language,
+        ...(attachments.length && {
+          attachments: attachments.map((a) => ({ contentType: a.contentType, contentUrl: a.url, name: a.name })),
+        }),
       } as never).subscribe({
         error: () => {
           stopWaiting();
-          addMessage("system", "Your message couldn't be sent. Please check your connection and try again.");
+          addMessage(
+            "system",
+            attachments.length
+              ? "Your image couldn't be sent. Please try again, or describe the problem in words."
+              : "Your message couldn't be sent. Please check your connection and try again.",
+          );
         },
       });
     },

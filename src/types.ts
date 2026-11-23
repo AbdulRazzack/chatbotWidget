@@ -15,10 +15,18 @@ export interface WidgetConfig {
 
 export type Role = "user" | "assistant" | "system";
 
+export interface ChatAttachment {
+  name: string;
+  contentType: string;
+  /** Object URL for the visitor's own uploads; https URL for files sent by the agent. */
+  url: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: Role;
   text: string;
+  attachments?: ChatAttachment[];
 }
 
 /**

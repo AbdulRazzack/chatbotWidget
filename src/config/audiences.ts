@@ -9,6 +9,8 @@ export interface AudienceSettings {
   askVisitorType: boolean;
   /** Logged-in portals may show the user's own open cases. */
   canViewCases: boolean;
+  /** Show the paperclip so visitors can attach screenshots. Also needs "File uploads" on in Copilot Studio. */
+  allowAttachments: boolean;
 }
 
 // UI copy only. Which agent actually answers is decided server-side from the verified token.
@@ -26,6 +28,7 @@ export const AUDIENCES: Record<Audience, AudienceSettings> = {
     ],
     askVisitorType: true,
     canViewCases: false,
+    allowAttachments: true,
   },
   client: {
     title: "Client Support",
@@ -40,6 +43,7 @@ export const AUDIENCES: Record<Audience, AudienceSettings> = {
     ],
     askVisitorType: false,
     canViewCases: true,
+    allowAttachments: true,
   },
   candidate: {
     title: "Candidate Help",
@@ -54,6 +58,7 @@ export const AUDIENCES: Record<Audience, AudienceSettings> = {
     ],
     askVisitorType: false,
     canViewCases: true,
+    allowAttachments: true,
   },
 };
 

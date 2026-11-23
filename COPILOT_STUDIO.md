@@ -58,6 +58,22 @@ support-email fallback. If the agent asks a follow-up question instead, the visi
 > *(Client agent)* / **Candidate** *(Candidate agent)* / *the "I am a" value (Public agent; ask if missing)*.
 > Then repeat its reply line "Ticket created: <ID>" or "Ticket failed: <reason>" word for word.
 
+### Attachments (screenshots)
+
+Visitors can attach up to 3 images (PNG, JPG, WEBP, GIF; 5 MB each) to a message. They arrive in the
+agent as normal Direct Line attachments (`System.Activity.Attachments`).
+
+- **Turn on per front agent:** Settings → Generative AI → File processing capabilities → **File uploads**.
+  The agent can then read the screenshot (e.g. an error message) when answering.
+- **Instruction to add:** *If the user attaches a screenshot, describe what it shows and use it to help. If it
+  looks like an ID document, certificate or criminal-record information, don't read out its contents; ask them
+  to use the secure upload in their portal instead.*
+- **Not yet wired: putting the image on the HubSpot ticket.** The connected Ticket Agent only receives the
+  text the front agent writes, not the file. To attach it to the ticket: add a topic in the front agent that
+  takes `First(System.Activity.Attachments)` and passes it to an agent flow with a **File** input; the flow
+  uploads it with HubSpot's Files API and adds it to the ticket's note. Until then, the ticket description
+  should say "screenshot provided in chat".
+
 ### Optional events (not required)
 
 | Direction | Event | Use |

@@ -68,6 +68,7 @@ Things to try:
 - *"My check link has expired"* (Candidate)
 - *"create a ticket for jane@test.com, I can't submit my DBS check"* (any)
 - **Talk to a person**: fill in the form → you get a reference like `VET-1001`
+- **Paperclip** (or paste a screenshot with Ctrl/Cmd + V, or drag one in): attach up to 3 images
 - An email containing `fail` (e.g. `fail@test.com`) simulates HubSpot being down
 
 The terminal shows the HubSpot ticket the Ticket Agent *would* create. The mock only recognises a few
@@ -129,7 +130,14 @@ under Knowledge unless you want web answers.
 This is safe because **Require secured access** (next section) means only our token server, which holds
 the secret key, can start a chat. Client/candidate identity is checked by the token server.
 
-**4. Publish** the agent. The website only ever uses the latest published version.
+**4. Turn on file uploads** (so visitors can attach screenshots)
+1. **Settings → Generative AI** → **File processing capabilities**.
+2. Turn on **File uploads** → **Save**.
+
+Without this, the widget still shows the paperclip, but the agent can't see the image.
+To hide the paperclip on a site, set `allowAttachments: false` for that audience in `src/config/audiences.ts`.
+
+**5. Publish** the agent. The website only ever uses the latest published version.
 
 ---
 
@@ -228,6 +236,8 @@ npx serve .             # terminal 2 → http://localhost:3000/demo/public.html
 | Client/Candidate buttons → **401 Invalid portal token** | Test logins not enabled | Set `DEV_TEST_LOGINS=true` in `.env` and restart |
 | Agent says it created a ticket but **no confirmation screen** | Reply didn't include the ticket number | Tighten the "repeat 'Ticket created: <ID>' word for word" instruction (3b step 1.5), publish |
 | Ticket step says **no access** | Ticket Agent still requires sign-in | See the note under 3a |
+| Agent ignores an attached image | File uploads off | 3b step 4: **Settings → Generative AI → File uploads** on, publish |
+| **"Only images (PNG, JPG, WEBP, GIF) can be attached"** | Deliberate | Chat is for screenshots; documents go through the portal's secure upload |
 | Changes in Copilot Studio **don't show up** | Old published version | **Publish** again and open a **new** chat |
 | `node: bad option: --env-file` | Node too old | Install Node 20.6+ |
 | **Port already in use** | Something still running | Ctrl + C in the old terminal |
@@ -296,7 +306,15 @@ Issue: Cannot submit my DBS Enhanced application
 
 **Agent → widget**: a reply containing `Ticket created: <ID>` shows the confirmation screen;
 `Ticket failed` shows the support-email fallback. If the agent asks a follow-up question, the visitor
-answers in chat. Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)**.
+answers in chat.
+
+**Attachments**: the paperclip (or paste / drag-and-drop) attaches up to **3 images, 5 MB each**
+(PNG, JPG, WEBP, GIF). They're uploaded through Direct Line's upload endpoint with the message. PDFs and
+other documents are blocked on purpose: VETTING's spec says ID documents, certificates and
+criminal-record details must go through the secure portal process, not chat. Rules live in
+`src/config/attachments.ts`.
+
+Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)**.
 
 ### Security rules
 - Secret keys live only in the token server's `.env`; the HubSpot key only in the Ticket Agent's workflows.
@@ -305,6 +323,7 @@ answers in chat. Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_
 - "Ticket logged" is shown only when the agent replies with a real ticket number.
 - Agent replies are rendered as text (small safe markdown subset; no HTML).
 - Agents never ask for passwords, ID images or criminal-record details, and never make suitability decisions.
+- Chat attachments are images only, with a visible "screenshots only" notice; documents go through the portal.
 
 ### Project structure
 
@@ -312,7 +331,8 @@ answers in chat. Full details for agent builders: **[COPILOT_STUDIO.md](COPILOT_
 src/
   main.tsx                 loader: data-* attrs → Shadow DOM → window.VettingChat
   App.tsx                  launcher + window
-  config/audiences.ts      per-audience greeting, quick replies, labels
+  config/audiences.ts      per-audience greeting, quick replies, labels, allowAttachments
+  config/attachments.ts    allowed file types, size and count limits, privacy notice
   api/tokenClient.ts       calls the token server
   hooks/useConversation.ts Direct Line connection, messages, typing, ticket detection
   components/              Launcher, ChatWindow, MessageList, RichText, Composer, QuickReplies, HandoffForm, TicketConfirmation
