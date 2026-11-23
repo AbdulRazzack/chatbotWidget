@@ -145,6 +145,44 @@ async function frontAgent(convId, activity) {
   botSays(convId, { type: "typing" });
   await sleep(700); // Copilot Studio doesn't stream over Direct Line; replies arrive whole.
 
+  // Ticket requests arrive as chat messages: the handoff form ("Please create a support ticket…")
+  // or free text like "create a ticket for jane@test.com for …". The front agent passes them to the
+  // Ticketing agent (connected agent) and repeats its "Ticket created: <id>" reply.
+  const text = String(activity.text ?? "");
+  if (/create (?:a )?(?:support )?ticket/i.test(text)) {
+    const field = (name) => text.match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.trim();
+    const email = field("Email") ?? text.match(/[^\s@]+@[^\s@]+\.[^\s@]+/)?.[0];
+    if (!email) {
+      botSays(convId, { type: "message", text: "I can raise that with our team. What email address should they reply to?" });
+      return;
+    }
+    const visitorType = field("I am a");
+    const category =
+      c.audience === "client" ? "Client" : c.audience === "candidate" ? "Candidate" : capitalise(visitorType ?? text);
+    if (!category) {
+      botSays(convId, {
+        type: "message",
+        text: "Are you a candidate, a client or a referee?",
+        suggestedActions: { actions: ["Candidate", "Client", "Referee"].map((s) => ({ type: "imBack", title: s, value: `I'm a ${s.toLowerCase()} – please create a ticket for ${email}` })) },
+      });
+      return;
+    }
+    try {
+      const ticketRef = await ticketingAgent({
+        conversationId: convId,
+        category,
+        name: field("Name") ?? "(not given)",
+        email,
+        issue: field("Issue") ?? text,
+        region: field("Region"),
+      });
+      botSays(convId, { type: "message", text: `Ticket created: ${ticketRef}. Our support team will reply by email.` });
+    } catch (e) {
+      botSays(convId, { type: "message", text: `Ticket failed: ${e.message}. Please email support@vetting.com.` });
+    }
+    return;
+  }
+
   const hit = CANNED[c.audience].find(([re]) => re.test(activity.text ?? ""));
   if (hit) {
     const [, text, handoff, suggestions] = hit;
@@ -162,7 +200,10 @@ async function frontAgent(convId, activity) {
   }
 }
 
-const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : undefined);
+const capitalise = (s) => {
+  const m = String(s ?? "").match(/candidate|client|referee/i)?.[0];
+  return m ? m[0].toUpperCase() + m.slice(1).toLowerCase() : undefined;
+};
 
 // ─── Ticketing Agent (shared by all three) ───────────────────────────────────────────
 /** conversationId → ticketRef, so repeat requests reuse the ticket instead of duplicating it. */

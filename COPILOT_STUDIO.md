@@ -25,25 +25,54 @@ agent → Copilot Studio → Ticketing. Republish it after every change.
 For each front agent: Settings → Security → turn on **web channel security** (so the agent can't be
 reached with just its ID) and copy a **Direct Line secret** into the token server's `.env`.
 
-## Events
+## How the widget hands off to a human
 
-| Direction | Event name | `value` | Front agent should… |
-|---|---|---|---|
-| widget → agent | `startConversation` | `{ audience, region, pageUrl }` | Store in global variables. **Don't send a greeting**: the widget shows its own instantly. |
-| widget → agent | `handoffRequest` | `{ name, email, issue, visitorType?, region, pageUrl }` | Call the **Create HubSpot ticket** flow (inputs below), then reply with an event. |
-| agent → widget | `ticketCreated` | `{ ticketRef }` | Send after the flow returns a reference. The widget shows the confirmation screen. |
-| agent → widget | `ticketFailed` | `{ message? }` | Send if ticket creation failed. The widget shows the fallback (support email). |
-| agent → widget | `handoffSuggested` | — | Optional: shows a "Contact support" button when the agent can't help. |
+The **"Talk to a person" form is sent as a normal chat message** to the front agent, so it goes
+through the same route as a typed request: front agent → **VETTING Ticket Agent** (connected agent)
+→ HubSpot. The message looks like this:
 
-Normal chat is plain `message` activities. Question nodes with options show up as clickable chips
-(suggested actions). `**bold**` and `[links](https://…)` render; other markdown shows as text.
+```
+Please create a support ticket for me.
+Name: Jane Test
+Email: jane007@test.com
+I am a: referee          ← public site only
+Region: UK
+Issue: Cannot submit my DBS Enhanced application
+```
 
-Handle incoming events with a topic triggered by **"An event is received"** (trigger: *Event received*,
-event name as above), reading `System.Activity.Value`.
+The widget shows the confirmation screen when the agent's reply contains a ticket reference,
+for example **`Ticket created: 453011158252`**. A reply containing `Ticket failed` shows the
+support-email fallback. If the agent asks a follow-up question instead, the visitor just answers in chat.
 
-## Create HubSpot ticket flow: inputs
+### Instructions to add
 
-Called from each front agent's `handoffRequest` topic (and by the Ticketing agent).
+**VETTING Ticket Agent** (published, "Let other agents connect to and use this one" on):
+> When another agent sends you a request, it will include the person's name, email, category
+> (Candidate, Client or Referee), region and issue. Use those values exactly as given; never guess
+> the category. Always reply with "Ticket created: <ticket ID>" or "Ticket failed: <reason>".
+
+**Each front agent** (Agents → Add an agent → Copilot Studio → VETTING Ticket Agent; untick
+"Pass conversation history"):
+> When the user asks for a person or a ticket, or sends a message starting "Please create a support
+> ticket", pass the name, email, region and issue to the VETTING Ticket Agent with category = **Client**
+> *(Client agent)* / **Candidate** *(Candidate agent)* / *the "I am a" value (Public agent; ask if missing)*.
+> Then repeat its reply line "Ticket created: <ID>" or "Ticket failed: <reason>" word for word.
+
+### Optional events (not required)
+
+| Direction | Event | Use |
+|---|---|---|
+| widget → agent | `startConversation` `{ audience, region, pageUrl }` | Sent once on connect. Can be ignored, or used to set global variables. If the agent's Conversation Start topic greets on it, the visitor sees two greetings, so remove that greeting. |
+| agent → widget | `ticketCreated` `{ ticketRef }` / `ticketFailed` | Still understood, as an alternative to the "Ticket created:" text. |
+| agent → widget | `handoffSuggested` | Shows a "Contact support" button. |
+
+Normal chat is plain `message` activities. Question nodes with options show up as clickable chips.
+`**bold**` and `[links](https://…)` render; other markdown shows as text.
+
+## Later upgrade: one shared "Create HubSpot ticket" flow
+
+Optional hardening once everything works: front agents call one flow with fixed inputs instead of
+relying on the connected agent to copy fields. Inputs:
 
 | Input | Set by | Value |
 |---|---|---|

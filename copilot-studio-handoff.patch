@@ -1,0 +1,401 @@
+diff --git a/.env.example b/.env.example
+index 940f937..371c333 100644
+--- a/.env.example
++++ b/.env.example
+@@ -19,3 +19,7 @@ PORTAL_JWKS_URL=
+ PORTAL_ISSUER=
+ PORTAL_AUDIENCE=
+ PORTAL_ROLE_CLAIM=vetting_role
++
++# LOCAL TESTING ONLY: accept the dev page's fake client/candidate logins. Leave unset in production.
++# Also allows http://localhost origins. Must not be combined with PORTAL_JWKS_URL.
++DEV_TEST_LOGINS=
+diff --git a/COPILOT_STUDIO.md b/COPILOT_STUDIO.md
+index 41acab0..8b78fe0 100644
+--- a/COPILOT_STUDIO.md
++++ b/COPILOT_STUDIO.md
+@@ -25,25 +25,54 @@ agent → Copilot Studio → Ticketing. Republish it after every change.
+ For each front agent: Settings → Security → turn on **web channel security** (so the agent can't be
+ reached with just its ID) and copy a **Direct Line secret** into the token server's `.env`.
+ 
+-## Events
+-
+-| Direction | Event name | `value` | Front agent should… |
+-|---|---|---|---|
+-| widget → agent | `startConversation` | `{ audience, region, pageUrl }` | Store in global variables. **Don't send a greeting**: the widget shows its own instantly. |
+-| widget → agent | `handoffRequest` | `{ name, email, issue, visitorType?, region, pageUrl }` | Call the **Create HubSpot ticket** flow (inputs below), then reply with an event. |
+-| agent → widget | `ticketCreated` | `{ ticketRef }` | Send after the flow returns a reference. The widget shows the confirmation screen. |
+-| agent → widget | `ticketFailed` | `{ message? }` | Send if ticket creation failed. The widget shows the fallback (support email). |
+-| agent → widget | `handoffSuggested` | — | Optional: shows a "Contact support" button when the agent can't help. |
+-
+-Normal chat is plain `message` activities. Question nodes with options show up as clickable chips
+-(suggested actions). `**bold**` and `[links](https://…)` render; other markdown shows as text.
++## How the widget hands off to a human
++
++The **"Talk to a person" form is sent as a normal chat message** to the front agent, so it goes
++through the same route as a typed request: front agent → **VETTING Ticket Agent** (connected agent)
++→ HubSpot. The message looks like this:
++
++```
++Please create a support ticket for me.
++Name: Jane Test
++Email: jane007@test.com
++I am a: referee          ← public site only
++Region: UK
++Issue: Cannot submit my DBS Enhanced application
++```
++
++The widget shows the confirmation screen when the agent's reply contains a ticket reference,
++for example **`Ticket created: 453011158252`**. A reply containing `Ticket failed` shows the
++support-email fallback. If the agent asks a follow-up question instead, the visitor just answers in chat.
++
++### Instructions to add
++
++**VETTING Ticket Agent** (published, "Let other agents connect to and use this one" on):
++> When another agent sends you a request, it will include the person's name, email, category
++> (Candidate, Client or Referee), region and issue. Use those values exactly as given; never guess
++> the category. Always reply with "Ticket created: <ticket ID>" or "Ticket failed: <reason>".
++
++**Each front agent** (Agents → Add an agent → Copilot Studio → VETTING Ticket Agent; untick
++"Pass conversation history"):
++> When the user asks for a person or a ticket, or sends a message starting "Please create a support
++> ticket", pass the name, email, region and issue to the VETTING Ticket Agent with category = **Client**
++> *(Client agent)* / **Candidate** *(Candidate agent)* / *the "I am a" value (Public agent; ask if missing)*.
++> Then repeat its reply line "Ticket created: <ID>" or "Ticket failed: <reason>" word for word.
++
++### Optional events (not required)
++
++| Direction | Event | Use |
++|---|---|---|
++| widget → agent | `startConversation` `{ audience, region, pageUrl }` | Sent once on connect. Can be ignored, or used to set global variables. If the agent's Conversation Start topic greets on it, the visitor sees two greetings, so remove that greeting. |
++| agent → widget | `ticketCreated` `{ ticketRef }` / `ticketFailed` | Still understood, as an alternative to the "Ticket created:" text. |
++| agent → widget | `handoffSuggested` | Shows a "Contact support" button. |
+ 
+-Handle incoming events with a topic triggered by **"An event is received"** (trigger: *Event received*,
+-event name as above), reading `System.Activity.Value`.
++Normal chat is plain `message` activities. Question nodes with options show up as clickable chips.
++`**bold**` and `[links](https://…)` render; other markdown shows as text.
+ 
+-## Create HubSpot ticket flow: inputs
++## Later upgrade: one shared "Create HubSpot ticket" flow
+ 
+-Called from each front agent's `handoffRequest` topic (and by the Ticketing agent).
++Optional hardening once everything works: front agents call one flow with fixed inputs instead of
++relying on the connected agent to copy fields. Inputs:
+ 
+ | Input | Set by | Value |
+ |---|---|---|
+diff --git a/README.md b/README.md
+index 4b86d9b..bc1ebda 100644
+--- a/README.md
++++ b/README.md
+@@ -28,7 +28,7 @@ npm start          # mock Copilot Studio on :8787 + widget dev server on :5173
+ 
+ Open http://localhost:5173 and switch between public / client / candidate.
+ 
+-Try *"How long does a DBS check take?"*, *"My check link has expired"*, or **Talk to a person**.
++Try *"How long does a DBS check take?"*, *"My check link has expired"*, *"create a ticket for jane@test.com"*, or **Talk to a person**.
+ In the handoff form, an email containing `fail` simulates HubSpot being down.
+ The mock's terminal shows the HubSpot ticket the Ticketing agent *would* create.
+ 
+@@ -42,10 +42,12 @@ npx serve .        # terminal 2 → http://localhost:3000/demo/public.html
+ 
+ ## Going live with real Copilot Studio
+ 
+-1. Build the four agents. See **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)** for the event contract and ticketing inputs.
+-2. `cp .env.example .env` and fill in the three Direct Line secrets, allowed origins and portal token settings.
+-3. `npm run token-server`, then deploy it (e.g. Azure App Service) behind HTTPS.
+-4. Point each site's embed at it with `data-token-url`.
++1. Build and connect the agents. See **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)**.
++2. `cp .env.example .env` and fill in the three Direct Line secrets.
++   For local testing also set `DEV_TEST_LOGINS=true` so the dev page's client/candidate buttons work.
++3. `npm run start:real` (token server + dev page, Node 20.6+), open http://localhost:5173.
++4. For production: real portal-token settings instead of `DEV_TEST_LOGINS`, deploy the token server
++   behind HTTPS, and point each site's embed at it with `data-token-url`.
+ 
+ ## Embedding
+ 
+diff --git a/mock-copilot/server.js b/mock-copilot/server.js
+index 25bc706..0529d35 100644
+--- a/mock-copilot/server.js
++++ b/mock-copilot/server.js
+@@ -145,6 +145,44 @@ async function frontAgent(convId, activity) {
+   botSays(convId, { type: "typing" });
+   await sleep(700); // Copilot Studio doesn't stream over Direct Line; replies arrive whole.
+ 
++  // Ticket requests arrive as chat messages: the handoff form ("Please create a support ticket…")
++  // or free text like "create a ticket for jane@test.com for …". The front agent passes them to the
++  // Ticketing agent (connected agent) and repeats its "Ticket created: <id>" reply.
++  const text = String(activity.text ?? "");
++  if (/create (?:a )?(?:support )?ticket/i.test(text)) {
++    const field = (name) => text.match(new RegExp(`^${name}:\\s*(.+)$`, "im"))?.[1]?.trim();
++    const email = field("Email") ?? text.match(/[^\s@]+@[^\s@]+\.[^\s@]+/)?.[0];
++    if (!email) {
++      botSays(convId, { type: "message", text: "I can raise that with our team. What email address should they reply to?" });
++      return;
++    }
++    const visitorType = field("I am a");
++    const category =
++      c.audience === "client" ? "Client" : c.audience === "candidate" ? "Candidate" : capitalise(visitorType ?? text);
++    if (!category) {
++      botSays(convId, {
++        type: "message",
++        text: "Are you a candidate, a client or a referee?",
++        suggestedActions: { actions: ["Candidate", "Client", "Referee"].map((s) => ({ type: "imBack", title: s, value: `I'm a ${s.toLowerCase()} – please create a ticket for ${email}` })) },
++      });
++      return;
++    }
++    try {
++      const ticketRef = await ticketingAgent({
++        conversationId: convId,
++        category,
++        name: field("Name") ?? "(not given)",
++        email,
++        issue: field("Issue") ?? text,
++        region: field("Region"),
++      });
++      botSays(convId, { type: "message", text: `Ticket created: ${ticketRef}. Our support team will reply by email.` });
++    } catch (e) {
++      botSays(convId, { type: "message", text: `Ticket failed: ${e.message}. Please email support@vetting.com.` });
++    }
++    return;
++  }
++
+   const hit = CANNED[c.audience].find(([re]) => re.test(activity.text ?? ""));
+   if (hit) {
+     const [, text, handoff, suggestions] = hit;
+@@ -162,7 +200,10 @@ async function frontAgent(convId, activity) {
+   }
+ }
+ 
+-const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : undefined);
++const capitalise = (s) => {
++  const m = String(s ?? "").match(/candidate|client|referee/i)?.[0];
++  return m ? m[0].toUpperCase() + m.slice(1).toLowerCase() : undefined;
++};
+ 
+ // ─── Ticketing Agent (shared by all three) ───────────────────────────────────────────
+ /** conversationId → ticketRef, so repeat requests reuse the ticket instead of duplicating it. */
+diff --git a/package.json b/package.json
+index 5a8030d..12741e7 100644
+--- a/package.json
++++ b/package.json
+@@ -11,7 +11,8 @@
+     "typecheck": "tsc --noEmit",
+     "mock": "node mock-copilot/server.js",
+     "token-server": "node --env-file=.env server/token-server.js",
+-    "start": "concurrently -n gateway,widget -c blue,green \"npm:mock\" \"npm:dev\""
++    "start": "concurrently -n gateway,widget -c blue,green \"npm:mock\" \"npm:dev\"",
++    "start:real": "concurrently -n token,widget -c magenta,green \"npm:token-server\" \"npm:dev\""
+   },
+   "dependencies": {
+     "botframework-directlinejs": "^0.15.9",
+diff --git a/server/token-server.js b/server/token-server.js
+index a6e73c4..d780554 100644
+--- a/server/token-server.js
++++ b/server/token-server.js
+@@ -36,6 +36,13 @@ const PORTAL_AUDIENCE = process.env.PORTAL_AUDIENCE;
+ const ROLE_CLAIM = env("PORTAL_ROLE_CLAIM", "vetting_role"); // expected values: "client" | "candidate"
+ const jwks = PORTAL_JWKS_URL ? createRemoteJWKSet(new URL(PORTAL_JWKS_URL)) : null;
+ 
++// LOCAL TESTING ONLY: accept the fake logins "dev-token-client" / "dev-token-candidate" (used by the
++// dev page) so the client and candidate agents can be tried before VETTING's portal issues real tokens.
++// Refuses to start if this is switched on alongside a real portal configuration.
++const DEV_TEST_LOGINS = process.env.DEV_TEST_LOGINS === "true";
++if (DEV_TEST_LOGINS && jwks) throw new Error("DEV_TEST_LOGINS must not be used with real portal tokens");
++if (DEV_TEST_LOGINS) console.warn("⚠ DEV_TEST_LOGINS is on: fake client/candidate logins accepted. Never deploy like this.");
++
+ /** Returns { audience, userId, authenticated } or throws if a supplied token is invalid. */
+ async function identify(authHeader) {
+   const token = authHeader?.replace(/^Bearer\s+/i, "");
+@@ -43,6 +50,10 @@ async function identify(authHeader) {
+     // Anonymous public visitor. Direct Line user ids must start with "dl_" when using enhanced auth.
+     return { audience: "public", userId: `dl_${randomUUID()}`, authenticated: false };
+   }
++  if (DEV_TEST_LOGINS && (token === "dev-token-client" || token === "dev-token-candidate")) {
++    const role = token.slice("dev-token-".length);
++    return { audience: role, userId: `dl_${role}_devtest`, authenticated: true };
++  }
+   if (!jwks) throw new Error("Portal tokens are not configured on this server");
+ 
+   const { payload } = await jwtVerify(token, jwks, { issuer: PORTAL_ISSUER, audience: PORTAL_AUDIENCE });
+@@ -69,7 +80,8 @@ const app = express();
+ app.set("trust proxy", 1);
+ app.use(
+   cors({
+-    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
++    origin: (origin, cb) =>
++      cb(null, !origin || ALLOWED_ORIGINS.includes(origin) || (DEV_TEST_LOGINS && /^http:\/\/localhost:\d+$/.test(origin))),
+     methods: ["POST"],
+   }),
+ );
+diff --git a/src/components/ChatWindow.tsx b/src/components/ChatWindow.tsx
+index 097aef9..d1596dc 100644
+--- a/src/components/ChatWindow.tsx
++++ b/src/components/ChatWindow.tsx
+@@ -51,15 +51,18 @@ export function ChatWindow({ config, onClose }: Props) {
+   const handleHandoff = async (values: HandoffValues) => {
+     setSubmitting(true);
+     setHandoffError(null);
++    // Go back to the chat: the agent may ask a follow-up question before creating the ticket.
++    setView("chat");
+     try {
+       const ref = await convo.requestTicket({ ...values, region: config.region, pageUrl: location.href });
+       setTicketRef(ref);
+       setView("confirmed");
+       convo.addMessage("system", `Support request logged — reference ${ref}.`);
+     } catch {
+-      // Never claim a ticket exists unless the Ticketing Agent confirmed it.
+-      setHandoffError(
+-        "Sorry, we couldn't log your request just now. Please try again in a moment, or email support@vetting.com.",
++      // Never claim a ticket exists unless the agent confirmed it with a reference.
++      convo.addMessage(
++        "system",
++        "We couldn't confirm your request was logged. Please try again, or email support@vetting.com.",
+       );
+     } finally {
+       setSubmitting(false);
+diff --git a/src/hooks/useConversation.ts b/src/hooks/useConversation.ts
+index 9e15bcb..4fe04ec 100644
+--- a/src/hooks/useConversation.ts
++++ b/src/hooks/useConversation.ts
+@@ -5,7 +5,7 @@ import { EVENTS, type Audience, type ChatMessage, type HandoffRequest, type Widg
+ 
+ const uid = () => Math.random().toString(36).slice(2, 10);
+ const REPLY_TIMEOUT_MS = 30_000;
+-const TICKET_TIMEOUT_MS = 45_000;
++const TICKET_TIMEOUT_MS = 120_000; // connected agent + HubSpot calls can be slow
+ 
+ export type ConnectionState = "connecting" | "online" | "error";
+ 
+@@ -36,6 +36,34 @@ function textFromAttachments(attachments: IncomingActivity["attachments"]): stri
+   return out.join("\n");
+ }
+ 
++/**
++ * Finds a ticket reference in an agent's reply, e.g. "Ticket created: 453011158252" (HubSpot)
++ * or "VET-1002" (local mock). Front agents are instructed to repeat the Ticket Agent's
++ * "Ticket created: <id>" line, but we also accept looser phrasings.
++ */
++export function findTicketRef(text: string): string | null {
++  if (!/ticket|reference/i.test(text)) return null;
++  const m = text.match(/\b(VET-\d+|\d{6,})\b/);
++  return m ? m[1] : null;
++}
++
++export const isTicketFailure = (text: string) =>
++  /ticket failed|could(?:n'?t| not) (?:create|log|raise)/i.test(text);
++
++/** Turns the handoff form into the chat message the front agent passes to the Ticket Agent. */
++export function handoffMessage(req: HandoffRequest): string {
++  return [
++    "Please create a support ticket for me.",
++    `Name: ${req.name}`,
++    `Email: ${req.email}`,
++    req.visitorType ? `I am a: ${req.visitorType}` : null,
++    req.region ? `Region: ${req.region}` : null,
++    `Issue: ${req.issue}`,
++  ]
++    .filter(Boolean)
++    .join("\n");
++}
++
+ interface PendingTicket {
+   resolve: (ticketRef: string) => void;
+   reject: (err: Error) => void;
+@@ -104,6 +132,12 @@ export function useConversation(config: WidgetConfig, greeting: string) {
+         const text = [a.text, textFromAttachments(a.attachments)].filter(Boolean).join("\n").trim();
+         if (text) addMessage("assistant", text);
+         window.clearTimeout(typingTimer);
++        if (text && pendingTicketRef.current) {
++          const ref = findTicketRef(text);
++          if (ref && !isTicketFailure(text)) pendingTicketRef.current.resolve(ref);
++          else if (isTicketFailure(text)) pendingTicketRef.current.reject(new Error(text));
++          // Otherwise the agent is probably asking a follow-up question; keep waiting.
++        }
+         setSuggestions(
+           (a.suggestedActions?.actions ?? [])
+             .map((x) => String(x.value ?? x.title ?? ""))
+@@ -197,40 +231,50 @@ export function useConversation(config: WidgetConfig, greeting: string) {
+   );
+ 
+   /**
+-   * Sends the handoff form to the front agent, which passes it to the Ticketing Agent.
+-   * Resolves only when the agent sends back `ticketCreated` with a real reference.
++   * Sends the handoff form to the front agent as a normal chat message. The front agent passes
++   * it to the Ticket Agent (a connected agent) and replies with "Ticket created: <id>".
++   * Resolves when that reference appears (or a `ticketCreated` event arrives); rejects on a
++   * failure reply, a `ticketFailed` event, or after TICKET_TIMEOUT_MS.
+    */
+-  const requestTicket = useCallback((req: HandoffRequest): Promise<string> => {
+-    const dl = dlRef.current;
+-    if (!dl) return Promise.reject(new Error("Not connected"));
+-
+-    pendingTicketRef.current?.reject(new Error("Superseded"));
+-    return new Promise<string>((resolve, reject) => {
+-      const done = () => {
+-        window.clearTimeout(pending.timer);
+-        if (pendingTicketRef.current === pending) pendingTicketRef.current = null;
+-      };
+-      const pending: PendingTicket = {
+-        resolve: (ref) => {
+-          done();
+-          resolve(ref);
+-        },
+-        reject: (err) => {
+-          done();
+-          reject(err);
+-        },
+-        timer: window.setTimeout(() => pending.reject(new Error("Timed out waiting for ticket")), TICKET_TIMEOUT_MS),
+-      };
+-      pendingTicketRef.current = pending;
++  const requestTicket = useCallback(
++    (req: HandoffRequest): Promise<string> => {
++      const dl = dlRef.current;
++      if (!dl) return Promise.reject(new Error("Not connected"));
+ 
+-      dl.postActivity({
+-        type: "event",
+-        name: EVENTS.handoffRequest,
+-        from: { id: userIdRef.current },
+-        value: req,
+-      } as never).subscribe({ error: () => pending.reject(new Error("Could not send request")) });
+-    });
+-  }, []);
++      pendingTicketRef.current?.reject(new Error("Superseded"));
++      return new Promise<string>((resolve, reject) => {
++        const done = () => {
++          window.clearTimeout(pending.timer);
++          if (pendingTicketRef.current === pending) pendingTicketRef.current = null;
++        };
++        const pending: PendingTicket = {
++          resolve: (ref) => {
++            done();
++            resolve(ref);
++          },
++          reject: (err) => {
++            done();
++            reject(err);
++          },
++          timer: window.setTimeout(() => pending.reject(new Error("Timed out waiting for ticket")), TICKET_TIMEOUT_MS),
++        };
++        pendingTicketRef.current = pending;
++
++        addMessage("user", `Please pass this to the support team: ${req.issue}`);
++        setSuggestions([]);
++        setWaitingForReply(true);
++        dl.postActivity({
++          type: "message",
++          from: { id: userIdRef.current },
++          text: handoffMessage(req),
++          locale: navigator.language,
++          // Also attached as structured data, for agents that read activity.value.
++          value: { kind: EVENTS.handoffRequest, ...req },
++        } as never).subscribe({ error: () => pending.reject(new Error("Could not send request")) });
++      });
++    },
++    [addMessage],
++  );
+ 
+   return {
+     messages,

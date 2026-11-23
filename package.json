@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "mock": "node mock-copilot/server.js",
     "token-server": "node --env-file=.env server/token-server.js",
-    "start": "concurrently -n gateway,widget -c blue,green \"npm:mock\" \"npm:dev\""
+    "start": "concurrently -n gateway,widget -c blue,green \"npm:mock\" \"npm:dev\"",
+    "start:real": "concurrently -n token,widget -c magenta,green \"npm:token-server\" \"npm:dev\""
   },
   "dependencies": {
     "botframework-directlinejs": "^0.15.9",

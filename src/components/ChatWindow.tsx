@@ -51,15 +51,18 @@ export function ChatWindow({ config, onClose }: Props) {
   const handleHandoff = async (values: HandoffValues) => {
     setSubmitting(true);
     setHandoffError(null);
+    // Go back to the chat: the agent may ask a follow-up question before creating the ticket.
+    setView("chat");
     try {
       const ref = await convo.requestTicket({ ...values, region: config.region, pageUrl: location.href });
       setTicketRef(ref);
       setView("confirmed");
       convo.addMessage("system", `Support request logged — reference ${ref}.`);
     } catch {
-      // Never claim a ticket exists unless the Ticketing Agent confirmed it.
-      setHandoffError(
-        "Sorry, we couldn't log your request just now. Please try again in a moment, or email support@vetting.com.",
+      // Never claim a ticket exists unless the agent confirmed it with a reference.
+      convo.addMessage(
+        "system",
+        "We couldn't confirm your request was logged. Please try again, or email support@vetting.com.",
       );
     } finally {
       setSubmitting(false);

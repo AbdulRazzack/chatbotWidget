@@ -5,7 +5,7 @@ import { EVENTS, type Audience, type ChatMessage, type HandoffRequest, type Widg
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const REPLY_TIMEOUT_MS = 30_000;
-const TICKET_TIMEOUT_MS = 45_000;
+const TICKET_TIMEOUT_MS = 120_000; // connected agent + HubSpot calls can be slow
 
 export type ConnectionState = "connecting" | "online" | "error";
 
@@ -34,6 +34,34 @@ function textFromAttachments(attachments: IncomingActivity["attachments"]): stri
     if (a.contentType === "application/vnd.microsoft.card.adaptive") walk(a.content);
   }
   return out.join("\n");
+}
+
+/**
+ * Finds a ticket reference in an agent's reply, e.g. "Ticket created: 453011158252" (HubSpot)
+ * or "VET-1002" (local mock). Front agents are instructed to repeat the Ticket Agent's
+ * "Ticket created: <id>" line, but we also accept looser phrasings.
+ */
+export function findTicketRef(text: string): string | null {
+  if (!/ticket|reference/i.test(text)) return null;
+  const m = text.match(/\b(VET-\d+|\d{6,})\b/);
+  return m ? m[1] : null;
+}
+
+export const isTicketFailure = (text: string) =>
+  /ticket failed|could(?:n'?t| not) (?:create|log|raise)/i.test(text);
+
+/** Turns the handoff form into the chat message the front agent passes to the Ticket Agent. */
+export function handoffMessage(req: HandoffRequest): string {
+  return [
+    "Please create a support ticket for me.",
+    `Name: ${req.name}`,
+    `Email: ${req.email}`,
+    req.visitorType ? `I am a: ${req.visitorType}` : null,
+    req.region ? `Region: ${req.region}` : null,
+    `Issue: ${req.issue}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 interface PendingTicket {
@@ -104,6 +132,12 @@ export function useConversation(config: WidgetConfig, greeting: string) {
         const text = [a.text, textFromAttachments(a.attachments)].filter(Boolean).join("\n").trim();
         if (text) addMessage("assistant", text);
         window.clearTimeout(typingTimer);
+        if (text && pendingTicketRef.current) {
+          const ref = findTicketRef(text);
+          if (ref && !isTicketFailure(text)) pendingTicketRef.current.resolve(ref);
+          else if (isTicketFailure(text)) pendingTicketRef.current.reject(new Error(text));
+          // Otherwise the agent is probably asking a follow-up question; keep waiting.
+        }
         setSuggestions(
           (a.suggestedActions?.actions ?? [])
             .map((x) => String(x.value ?? x.title ?? ""))
@@ -197,40 +231,50 @@ export function useConversation(config: WidgetConfig, greeting: string) {
   );
 
   /**
-   * Sends the handoff form to the front agent, which passes it to the Ticketing Agent.
-   * Resolves only when the agent sends back `ticketCreated` with a real reference.
+   * Sends the handoff form to the front agent as a normal chat message. The front agent passes
+   * it to the Ticket Agent (a connected agent) and replies with "Ticket created: <id>".
+   * Resolves when that reference appears (or a `ticketCreated` event arrives); rejects on a
+   * failure reply, a `ticketFailed` event, or after TICKET_TIMEOUT_MS.
    */
-  const requestTicket = useCallback((req: HandoffRequest): Promise<string> => {
-    const dl = dlRef.current;
-    if (!dl) return Promise.reject(new Error("Not connected"));
+  const requestTicket = useCallback(
+    (req: HandoffRequest): Promise<string> => {
+      const dl = dlRef.current;
+      if (!dl) return Promise.reject(new Error("Not connected"));
 
-    pendingTicketRef.current?.reject(new Error("Superseded"));
-    return new Promise<string>((resolve, reject) => {
-      const done = () => {
-        window.clearTimeout(pending.timer);
-        if (pendingTicketRef.current === pending) pendingTicketRef.current = null;
-      };
-      const pending: PendingTicket = {
-        resolve: (ref) => {
-          done();
-          resolve(ref);
-        },
-        reject: (err) => {
-          done();
-          reject(err);
-        },
-        timer: window.setTimeout(() => pending.reject(new Error("Timed out waiting for ticket")), TICKET_TIMEOUT_MS),
-      };
-      pendingTicketRef.current = pending;
+      pendingTicketRef.current?.reject(new Error("Superseded"));
+      return new Promise<string>((resolve, reject) => {
+        const done = () => {
+          window.clearTimeout(pending.timer);
+          if (pendingTicketRef.current === pending) pendingTicketRef.current = null;
+        };
+        const pending: PendingTicket = {
+          resolve: (ref) => {
+            done();
+            resolve(ref);
+          },
+          reject: (err) => {
+            done();
+            reject(err);
+          },
+          timer: window.setTimeout(() => pending.reject(new Error("Timed out waiting for ticket")), TICKET_TIMEOUT_MS),
+        };
+        pendingTicketRef.current = pending;
 
-      dl.postActivity({
-        type: "event",
-        name: EVENTS.handoffRequest,
-        from: { id: userIdRef.current },
-        value: req,
-      } as never).subscribe({ error: () => pending.reject(new Error("Could not send request")) });
-    });
-  }, []);
+        addMessage("user", `Please pass this to the support team: ${req.issue}`);
+        setSuggestions([]);
+        setWaitingForReply(true);
+        dl.postActivity({
+          type: "message",
+          from: { id: userIdRef.current },
+          text: handoffMessage(req),
+          locale: navigator.language,
+          // Also attached as structured data, for agents that read activity.value.
+          value: { kind: EVENTS.handoffRequest, ...req },
+        } as never).subscribe({ error: () => pending.reject(new Error("Could not send request")) });
+      });
+    },
+    [addMessage],
+  );
 
   return {
     messages,

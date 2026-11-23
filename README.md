@@ -28,7 +28,7 @@ npm start          # mock Copilot Studio on :8787 + widget dev server on :5173
 
 Open http://localhost:5173 and switch between public / client / candidate.
 
-Try *"How long does a DBS check take?"*, *"My check link has expired"*, or **Talk to a person**.
+Try *"How long does a DBS check take?"*, *"My check link has expired"*, *"create a ticket for jane@test.com"*, or **Talk to a person**.
 In the handoff form, an email containing `fail` simulates HubSpot being down.
 The mock's terminal shows the HubSpot ticket the Ticketing agent *would* create.
 
@@ -42,10 +42,12 @@ npx serve .        # terminal 2 → http://localhost:3000/demo/public.html
 
 ## Going live with real Copilot Studio
 
-1. Build the four agents. See **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)** for the event contract and ticketing inputs.
-2. `cp .env.example .env` and fill in the three Direct Line secrets, allowed origins and portal token settings.
-3. `npm run token-server`, then deploy it (e.g. Azure App Service) behind HTTPS.
-4. Point each site's embed at it with `data-token-url`.
+1. Build and connect the agents. See **[COPILOT_STUDIO.md](COPILOT_STUDIO.md)**.
+2. `cp .env.example .env` and fill in the three Direct Line secrets.
+   For local testing also set `DEV_TEST_LOGINS=true` so the dev page's client/candidate buttons work.
+3. `npm run start:real` (token server + dev page, Node 20.6+), open http://localhost:5173.
+4. For production: real portal-token settings instead of `DEV_TEST_LOGINS`, deploy the token server
+   behind HTTPS, and point each site's embed at it with `data-token-url`.
 
 ## Embedding
 

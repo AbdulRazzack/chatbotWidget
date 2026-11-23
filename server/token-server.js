@@ -36,12 +36,23 @@ const PORTAL_AUDIENCE = process.env.PORTAL_AUDIENCE;
 const ROLE_CLAIM = env("PORTAL_ROLE_CLAIM", "vetting_role"); // expected values: "client" | "candidate"
 const jwks = PORTAL_JWKS_URL ? createRemoteJWKSet(new URL(PORTAL_JWKS_URL)) : null;
 
+// LOCAL TESTING ONLY: accept the fake logins "dev-token-client" / "dev-token-candidate" (used by the
+// dev page) so the client and candidate agents can be tried before VETTING's portal issues real tokens.
+// Refuses to start if this is switched on alongside a real portal configuration.
+const DEV_TEST_LOGINS = process.env.DEV_TEST_LOGINS === "true";
+if (DEV_TEST_LOGINS && jwks) throw new Error("DEV_TEST_LOGINS must not be used with real portal tokens");
+if (DEV_TEST_LOGINS) console.warn("⚠ DEV_TEST_LOGINS is on: fake client/candidate logins accepted. Never deploy like this.");
+
 /** Returns { audience, userId, authenticated } or throws if a supplied token is invalid. */
 async function identify(authHeader) {
   const token = authHeader?.replace(/^Bearer\s+/i, "");
   if (!token) {
     // Anonymous public visitor. Direct Line user ids must start with "dl_" when using enhanced auth.
     return { audience: "public", userId: `dl_${randomUUID()}`, authenticated: false };
+  }
+  if (DEV_TEST_LOGINS && (token === "dev-token-client" || token === "dev-token-candidate")) {
+    const role = token.slice("dev-token-".length);
+    return { audience: role, userId: `dl_${role}_devtest`, authenticated: true };
   }
   if (!jwks) throw new Error("Portal tokens are not configured on this server");
 
@@ -69,7 +80,8 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(
   cors({
-    origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+    origin: (origin, cb) =>
+      cb(null, !origin || ALLOWED_ORIGINS.includes(origin) || (DEV_TEST_LOGINS && /^http:\/\/localhost:\d+$/.test(origin))),
     methods: ["POST"],
   }),
 );
